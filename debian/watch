@@ -1,0 +1,3 @@
+version=4
+https://github.com/rabbitmq/@PACKAGE@/releases \
+      (?:.*?/)?@PACKAGE@_(\d[\d.]*)\.orig\.tar\.xz debian uupdate

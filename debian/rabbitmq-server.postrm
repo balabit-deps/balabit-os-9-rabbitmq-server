@@ -1,0 +1,30 @@
+#!/bin/sh
+
+set -e
+
+if [ "${1}" = "remove" ] || [ "${1}" = "upgrade" ] ; then
+	# Remove traces of plugins
+	rm -rf /var/lib/rabbitmq/plugins-scratch
+fi
+
+if [ "${1}" = "purge" ] ; then
+	rm -f /etc/default/rabbitmq
+	if [ -d /var/lib/rabbitmq ]; then
+		rm -rf /var/lib/rabbitmq
+	fi
+	if [ -d /var/log/rabbitmq ]; then
+		rm -rf /var/log/rabbitmq
+	fi
+	if [ -d /etc/rabbitmq ]; then
+		rm -rf /etc/rabbitmq
+	fi
+
+	if getent passwd rabbitmq >/dev/null; then
+		# Stop epmd if run by the rabbitmq user
+		pkill -u rabbitmq epmd || :
+	fi
+fi
+
+#DEBHELPER#
+
+exit 0

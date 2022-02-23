@@ -1,0 +1,134 @@
+*** WARNING ***
+
+0/ Intro
+
+RabbitMQ, in its default configuration, is insecure.  A number of
+security measures are necessary to prevent remote execution of code
+from malicious actors.
+
+
+1/ Firewalling
+
+A default RabbitMQ installation opens the following ports, with the
+following authentication schemes:
+ - 4369: EPMD daemon, for port lookups; IP-based auth limited to
+   localhost
+ - 5672: AMQP protcol; username/password auth
+ - 25672: RabbitMQ "distribution" port for inter-node communication; a
+   "magic cookie" shared secret for auth
+
+Unauthorized access to all of these ports is a security risk; you
+should configure your firewall to disallow outside access to them.
+Speifically, unrestricted access to the port 25672, with the default
+weak secret before 3.9.8-3 (see below), EXPOSES YOUR SERVER TO A
+REMOTE CODE EXECUTION VULNERABILITY.  Unrestricted access to port 4369
+serves to advertise that vulnerability.
+
+Though not open by default, RabbitMQ may also be configured to open
+the following ports, which are also strongly advised to be firewalled:
+ - 5671: AMQP with SSL
+ - 15671: Management port with SSL
+ - 15672: Management port without SSL
+
+
+2/ Erlang cookie
+
+Prior to Debian version 3.9.8-3, rabbitmq-server generated an Erlang
+"magic cookie" shared secret if one did not exist.  This secret is
+stored in /var/lib/rabbitmq/.erlang.cookie
+
+However, due to predictable seeds and a non-cryptographic randomizer,
+the automatically-generated secret written by Erlang only supplies 20
+to 40 bits of entropy.  This allows a remote attacker with access to
+port 25672 to brute-force the "magic cookie," potentially within
+minutes, authenticate as a remote node, and EXECUTE ARBITRARY CODE.
+
+Since 3.9.8-3, the rabbitmq-server node will use openssl to generate a
+cryptographically-secure cookie during first installation, mitigating
+this vulnerability.
+
+Servers which installed a prior version, and are upgrading to 3.9.8-3
+or higher, ARE STILL VULNERABLE, as the package will not regenerate
+the secret if it exists already.  This is because the secret is
+designed to be shared between nodes in a cluster, and thus
+regenerating it would break existing clusters.
+
+Operators upgrading from earlier versions of rabbitmq-server are
+strongly encouraged to generate a new secret.  This can be done via:
+
+    openssl rand -base64 42 >/var/lib/rabbitmq/.erlang.cookie
+
+
+3/ TLS
+
+It is strongly advised to use TLS to protect data in transit to your
+RabbitMQ cluster. Below is an example /etc/rabbitmq/rabbitmq.config
+which achieves that; note that it uses only RAM nodes in the cluster,
+which is not a recommended configuration for production, as it can
+lead to data loss.
+
+[
+  {rabbit, [
+    {loopback_users, [<<"guest">>]},
+    {cluster_nodes, {['rabbit@node1.example.com', 'rabbit@node2.example.com', 'rabbit@node3.example.com'], ram}},
+    {cluster_partition_handling, autoheal},
+    {tcp_listen_options, [
+         {backlog,       128},
+         {nodelay,       true},
+         {linger,        {true, 0}},
+         {exit_on_close, false}
+    ]},
+    {collect_statistics_interval, 60000},
+    {ssl_listeners, [{"10.0.1.3", 5671}]},
+    {ssl_options, [
+                   {cacertfile,"/etc/ssl/certs/my-cluster-ca-chain.pem"},
+                   {certfile,"/etc/rabbitmq/ssl/public/node1.example.com.crt"},
+                   {keyfile,"/etc/rabbitmq/ssl/private/node1.example.com.key"},
+                   {secure_renegotiate,true},
+                   {reuse_sessions,true},
+                   {honor_cipher_order,true},
+                   {verify,verify_none},
+                   {fail_if_no_peer_cert,false}
+                  ]},
+    {vm_memory_high_watermark, 0.4},
+    {default_user, <<"guest">>},
+    {default_pass, <<"guest">>}
+  ]},
+  {kernel, [
+    
+  ]}
+,
+  {rabbitmq_management, [
+    {listener, [
+      {ip, "10.0.1.3"},
+      {port, 15671},
+      {ssl, true},
+      {ssl_opts, [
+                  {cacertfile, "/etc/ssl/certs/my-cluster-ca-chain.pem"},
+                  {certfile, "/etc/rabbitmq/ssl/public/node1.example.com.crt"},
+                  {keyfile, "/etc/rabbitmq/ssl/private/node1.example.com.key"},
+                  {verify,verify_none},
+                  {fail_if_no_peer_cert,false}
+                 ]}
+    ]}
+  ]}
+].
+
+Documenting how to generate TLS certificates is out of the scope of
+this small README. However, you can see an example script to do so
+over here:
+
+https://salsa.debian.org/openstack-team/debian/openstack-cluster-installer/-/blob/debian/xena/bin/oci-root-ca-gen
+
+with the matching configuration files over here:
+
+https://salsa.debian.org/openstack-team/debian/openstack-cluster-installer/-/tree/debian/xena/etc/openstack-cluster-installer/pki
+
+
+4/ guest account
+
+The "guest" account which is pre-configured in the initial
+installation is only accessible from 127.0.0.1 or ::1; its password is
+also initially set to "guest".
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 15 Jan 2022 11:52:42 +0100

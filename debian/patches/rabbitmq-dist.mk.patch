@@ -1,0 +1,21 @@
+Description: make 4.3 compatibility change
+Author: Yuriy Vidineev <yuriy.vidineev@revjet.com>
+Forwarded: no
+Bug-Debian: https://bugs.debian.org/964636
+Last-Update: 2020-07-22
+
+Index: rabbitmq-server/deps/rabbit_common/mk/rabbitmq-dist.mk
+===================================================================
+--- rabbitmq-server.orig/deps/rabbit_common/mk/rabbitmq-dist.mk
++++ rabbitmq-server/deps/rabbit_common/mk/rabbitmq-dist.mk
+@@ -80,8 +80,8 @@ $$(dist_$(1)_ez): $$(if $$(wildcard $(3)
+ ifeq ($$(shell test -f $(3)/rabbitmq-components.mk \
+ 	&& grep -q '^list-dist-deps::' $(3)/Makefile && echo yes),yes)
+ $$(dist_$(1)_ez): $$(patsubst %,$(3)/%, \
+-	$$(shell $(MAKE) --no-print-directory -C $(3) list-dist-deps \
+-	APP=$(1) VSN=$(2) EZ_DIR=$$(abspath $$(dist_$(1)_ez_dir))))
++	$$(shell env MAKEFLAGS=--no-print-directory $$(MAKE) -C $(3) list-dist-deps \
++	APP=$(1) VSN=$(2) EZ_DIR=$$(abspath $$(dist_$(1)_ez_dir)) 2>/dev/null))
+ endif
+ 
+ ERLANGMK_DIST_APPS += $(1)

@@ -1,0 +1,70 @@
+Source: rabbitmq-server
+Section: net
+Priority: optional
+Maintainer: Debian OpenStack <team+openstack@tracker.debian.org>
+Uploaders:
+ James Page <james.page@ubuntu.com>,
+ Thomas Goirand <zigo@debian.org>,
+Build-Depends:
+ debhelper-compat (= 10),
+ dh-python,
+ elixir (>= 1.12.2),
+ erlang-base (>= 1:24.0),
+ erlang-crypto (>= 1:24.0),
+ erlang-dev (>= 1:24.0),
+ erlang-edoc (>= 1:24.0),
+ erlang-eldap (>= 1:24.0),
+ erlang-erl-docgen (>= 1:24.0),
+ erlang-eunit (>= 1:24.0),
+ erlang-inets (>= 1:24.0),
+ erlang-mnesia (>= 1:24.0),
+ erlang-nox (>= 1:24.0),
+ erlang-os-mon (>= 1:24.0),
+ erlang-parsetools (>= 1:24.0),
+ erlang-public-key (>= 1:24.0),
+ erlang-runtime-tools (>= 1:24.0),
+ erlang-src (>= 1:24.0),
+ erlang-ssl (>= 1:24.0),
+ erlang-syntax-tools (>= 1:24.0),
+ erlang-tools (>= 1:24.0),
+ erlang-xmerl (>= 1:24.0),
+ locales-all,
+ python3-all,
+ python3-simplejson,
+ rsync,
+ unzip,
+ xmlto,
+ xsltproc,
+ zip,
+Standards-Version: 4.6.0
+Vcs-Browser: https://salsa.debian.org/openstack-team/third-party/rabbitmq-server
+Vcs-Git: https://salsa.debian.org/openstack-team/third-party/rabbitmq-server.git
+Homepage: https://www.rabbitmq.com/
+
+Package: rabbitmq-server
+Architecture: all
+Depends:
+ adduser,
+ erlang-base | erlang-base-hipe,
+ erlang-crypto (>= 1:24.0),
+ erlang-eldap (>= 1:24.0),
+ erlang-inets (>= 1:24.0),
+ erlang-mnesia (>= 1:24.0),
+ erlang-os-mon (>= 1:24.0),
+ erlang-parsetools (>= 1:24.0),
+ erlang-public-key (>= 1:24.0),
+ erlang-runtime-tools (>= 1:24.0),
+ erlang-ssl (>= 1:24.0),
+ erlang-syntax-tools (>= 1:24.0),
+ erlang-tools (>= 1:24.0),
+ erlang-xmerl (>= 1:24.0),
+ logrotate,
+ lsb-base,
+ openssl,
+ socat,
+ ${misc:Depends},
+ ${python3:Depends},
+Description: AMQP server written in Erlang
+ RabbitMQ is an implementation of AMQP, the emerging standard for high
+ performance enterprise messaging. The RabbitMQ server is a robust and
+ scalable implementation of an AMQP broker.

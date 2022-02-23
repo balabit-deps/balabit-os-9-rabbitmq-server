@@ -1,0 +1,4 @@
+debian/rabbitmq-env.conf	/usr/share/rabbitmq
+debian/rabbitmq-script-wrapper /usr/lib/rabbitmq/bin
+debian/rabbitmq-server-wait /usr/lib/rabbitmq/bin
+deps/rabbitmq_management/bin/rabbitmqadmin	/usr/bin

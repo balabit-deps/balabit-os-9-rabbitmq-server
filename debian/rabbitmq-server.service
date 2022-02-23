@@ -1,0 +1,24 @@
+[Unit]
+Description=RabbitMQ Messaging Server
+After=network.target epmd.socket
+Wants=network.target epmd.socket
+
+[Service]
+Type=notify
+User=rabbitmq
+Group=rabbitmq
+UMask=0027
+NotifyAccess=all
+TimeoutStartSec=600
+LimitNOFILE=65536
+SyslogIdentifier=rabbitmq
+Restart=on-failure
+RestartSec=10
+WorkingDirectory=/var/lib/rabbitmq
+ExecStart=/usr/lib/rabbitmq/bin/rabbitmq-server
+ExecStop=/usr/sbin/rabbitmqctl stop
+StandardOutput=append:/var/log/rabbitmq/rabbitmq-server.log
+StandardError=append:/var/log/rabbitmq/rabbitmq-server.error.log
+
+[Install]
+WantedBy=multi-user.target
