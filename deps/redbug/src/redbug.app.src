@@ -1,0 +1,8 @@
+{application,redbug,
+             [{registered,[]},
+              {description,"Erlang Tracing Debugger"},
+              {vsn,"2.0.7"},
+              {applications,[kernel,stdlib,runtime_tools]},
+              {licenses,["MIT"]},
+              {links,[{"Github","https://github.com/massemanet/redbug"}]},
+              {modules,[]}]}.

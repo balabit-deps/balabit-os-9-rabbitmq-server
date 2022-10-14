@@ -1,0 +1,35 @@
+%% -*- mode: erlang;erlang-indent-level: 2;indent-tabs-mode: nil -*-
+%% vim: set ft=erlang ts=2 sw=2:
+
+%% this code is not particularly nice.
+%% we fold a list of fun/0's over CONFIG (the rebar.config).
+%% If the fun returns 'true', nothing happens,
+%% If it returns '{Key, Val}', 'Val' is inserted or appended to the value of 'Key'.
+
+NOW = fun() ->
+          erlang:is_builtin(erlang, timestamp, 0) orelse {erl_opts, {d, 'USE_NOW'}}
+      end,
+
+GITVSN = fun() ->
+             case os:cmd("(git describe | grep -Eo '^[0-9\.]+' | tr -d '\n') 2>/dev/null") of
+               [] -> true;
+               VSN -> {edoc_opts, {def, [{version, VSN}]}}
+             end
+         end,
+
+Funs = [NOW, GITVSN],
+
+%% ================================================
+KeyAppend = fun(_, Tag, E, [])           -> [{Tag, [E]}];
+               (_, Tag, E, [{Tag, O}|T]) -> [{Tag, [E|O]}|T];
+               (G, Tag, E, [H|T])        -> [H|G(G, Tag, E, T)]
+            end,
+
+Checker = fun(Fun, CFG) ->
+              case Fun() of
+                true -> CFG;
+                {Key, Val} -> KeyAppend(KeyAppend, Key, Val, CFG)
+              end
+          end,
+
+lists:foldl(Checker, CONFIG, Funs).
