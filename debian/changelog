@@ -1,3 +1,11 @@
+rabbitmq-server (3.9.13-1ubuntu0.22.04.1) jammy; urgency=medium
+
+  * d/p/lp1999816-fix-rabbitmqctl-status-disk-free-timeout.patch:
+    Fix rabbitmqctl status when free disk space cannot be determined 
+    (LP: #1999816).
+
+ -- Jorge Merlino <jorge.merlino@canonical.com>  Wed, 28 Dec 2022 21:34:18 -0300
+
 rabbitmq-server (3.9.13-1) unstable; urgency=medium
 
   * New upstream release.
