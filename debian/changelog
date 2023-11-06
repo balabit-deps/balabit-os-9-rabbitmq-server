@@ -1,3 +1,15 @@
+rabbitmq-server (3.9.13-1ubuntu0.22.04.2) jammy-security; urgency=medium
+
+  * SECURITY UPDATE: Denial of service
+    - debian/patches/CVE-2023-46118-*.patch: Introduce HTTP request body limit
+      for definition uploads and Reduce default HTTP API request body size limit
+      to 10 MiB in deps/rabbitmq_management/Makefile, include/rabbit_mgmt.hrl,
+      priv/schema/rabbitmq_management.schema, src/rabbit_mgmt_util.erl,
+      src/rabbit_mgmt_wm_definitions.erl.
+    - CVE-2023-46118
+
+ -- Leonidas Da Silva Barbosa <leo.barbosa@canonical.com>  Mon, 06 Nov 2023 09:22:43 -0300
+
 rabbitmq-server (3.9.13-1ubuntu0.22.04.1) jammy; urgency=medium
 
   * d/p/lp1999816-fix-rabbitmqctl-status-disk-free-timeout.patch:

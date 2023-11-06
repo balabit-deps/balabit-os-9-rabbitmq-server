@@ -1,3 +1,5 @@
 lets-use-python3-not-python-binary.patch
 rabbitmq-dist.mk.patch
 lp1999816-fix-rabbitmqctl-status-disk-free-timeout.patch
+CVE-2023-46118-1.patch
+CVE-2023-46118-2.patch
