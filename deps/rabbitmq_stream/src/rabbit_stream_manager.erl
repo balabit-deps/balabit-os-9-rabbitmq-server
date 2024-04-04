@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is Pivotal Software, Inc.
-%% Copyright (c) 2020-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2020-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(rabbit_stream_manager).
@@ -57,9 +57,8 @@ delete(VirtualHost, Reference, Username) ->
     gen_server:call(?MODULE, {delete, VirtualHost, Reference, Username}).
 
 -spec lookup_leader(binary(), binary()) ->
-    {ok, pid()} | {error, not_available} |
-    {error, not_found}.
-
+                       {ok, pid()} | {error, not_available} |
+                       {error, not_found}.
 lookup_leader(VirtualHost, Stream) ->
     gen_server:call(?MODULE, {lookup_leader, VirtualHost, Stream}).
 
@@ -195,7 +194,15 @@ handle_call({create, VirtualHost, Reference, Arguments, Username},
                                 {error, Err} ->
                                     rabbit_log:warning("Error while creating ~p stream, ~p",
                                                        [Reference, Err]),
-                                    {reply, {error, internal_error}, State}
+                                    {reply, {error, internal_error}, State};
+                                {protocol_error,
+                                 precondition_failed,
+                                 Msg,
+                                 Args} ->
+                                    rabbit_log:warning("Error while creating ~p stream, "
+                                                       ++ Msg,
+                                                       [Reference] ++ Args),
+                                    {reply, {error, validation_failed}, State}
                             end
                         catch
                             exit:Error ->
@@ -210,10 +217,18 @@ handle_call({create, VirtualHost, Reference, Arguments, Username},
                 end
             catch
                 exit:ExitError ->
-                    % likely to be a problem of inequivalent args on an existing stream
-                    rabbit_log:error("Error while creating ~p stream: ~p",
-                                     [Reference, ExitError]),
-                    {reply, {error, validation_failed}, State}
+                    case ExitError of
+                        % likely a problem of inequivalent args on an existing stream
+                        {amqp_error, precondition_failed, M, _} ->
+                            rabbit_log:info("Error while creating ~p stream, "
+                                            ++ M,
+                                            [Reference]),
+                            {reply, {error, validation_failed}, State};
+                        E ->
+                            rabbit_log:warning("Error while creating ~p stream, ~p",
+                                               [Reference, E]),
+                            {reply, {error, validation_failed}, State}
+                    end
             end;
         error ->
             {reply, {error, validation_failed}, State}
@@ -324,35 +339,33 @@ handle_call({topology, VirtualHost, Stream}, _From, State) ->
                       true ->
                           QState = amqqueue:get_type_state(Q),
                           #{name := StreamName} = QState,
-                          StreamMembers =
-                              case rabbit_stream_coordinator:members(StreamName)
-                              of
-                                  {ok, Members} ->
-                                      maps:fold(fun (_Node, {undefined, _Role},
-                                                     Acc) ->
-                                                        Acc;
-                                                    (LeaderNode, {_Pid, writer},
-                                                     Acc) ->
-                                                        Acc#{leader_node =>
-                                                                 LeaderNode};
-                                                    (ReplicaNode,
-                                                     {_Pid, replica}, Acc) ->
-                                                        #{replica_nodes :=
-                                                              ReplicaNodes} =
-                                                            Acc,
-                                                        Acc#{replica_nodes =>
-                                                                 ReplicaNodes
-                                                                 ++ [ReplicaNode]};
-                                                    (_Node, _, Acc) ->
-                                                        Acc
-                                                end,
-                                                #{leader_node => undefined,
-                                                  replica_nodes => []},
-                                                Members);
-                                  _ ->
-                                      {error, stream_not_found}
-                              end,
-                          {ok, StreamMembers};
+                          case rabbit_stream_coordinator:members(StreamName) of
+                              {ok, Members} ->
+                                  {ok,
+                                   maps:fold(fun (_Node, {undefined, _Role},
+                                                  Acc) ->
+                                                     Acc;
+                                                 (LeaderNode, {_Pid, writer},
+                                                  Acc) ->
+                                                     Acc#{leader_node =>
+                                                              LeaderNode};
+                                                 (ReplicaNode, {_Pid, replica},
+                                                  Acc) ->
+                                                     #{replica_nodes :=
+                                                           ReplicaNodes} =
+                                                         Acc,
+                                                     Acc#{replica_nodes =>
+                                                              ReplicaNodes
+                                                              ++ [ReplicaNode]};
+                                                 (_Node, _, Acc) ->
+                                                     Acc
+                                             end,
+                                             #{leader_node => undefined,
+                                               replica_nodes => []},
+                                             Members)};
+                              _ ->
+                                  {error, stream_not_available}
+                          end;
                       _ ->
                           {error, stream_not_found}
                   end;

@@ -1,15 +1,15 @@
-load("@bazel-erlang//:bazel_erlang_lib.bzl", "erlc")
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load(
     "//:rabbitmq.bzl",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
-    "RABBITMQ_TEST_ERLC_OPTS",
     "assert_suites",
     "broker_for_integration_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
     "rabbitmq_suite",
+    "rabbitmq_test_helper",
 )
 
 APP_NAME = "rabbitmq_mqtt"
@@ -41,56 +41,56 @@ APP_ENV = """[
 	    {sparkplug, false}
 	  ]"""
 
-FIRST_SRCS = [
-    "src/rabbit_mqtt_retained_msg_store.erl",
-]
-
 BUILD_DEPS = [
     "//deps/rabbitmq_cli:rabbitmqctl",
 ]
 
 DEPS = [
-    "//deps/amqp_client:bazel_erlang_lib",
-    "//deps/rabbit_common:bazel_erlang_lib",
-    "@ra//:bazel_erlang_lib",
-    "@ranch//:bazel_erlang_lib",
+    "//deps/amqp_client:erlang_app",
+    "//deps/rabbit_common:erlang_app",
+    "@ra//:erlang_app",
+    "@ranch//:erlang_app",
 ]
 
 RUNTIME_DEPS = [
-    "//deps/rabbit:bazel_erlang_lib",
+    "//deps/rabbit:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
     app_env = APP_ENV,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_module = APP_MODULE,
     app_name = APP_NAME,
     build_deps = BUILD_DEPS,
-    first_srcs = FIRST_SRCS,
     runtime_deps = RUNTIME_DEPS,
     deps = DEPS,
 )
 
-xref(tags = ["xref"])
+xref(
+    additional_libs = BUILD_DEPS,
+)
+
+plt(
+    name = "base_plt",
+    deps = DEPS,
+)
 
 dialyze(
-    dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
-    plt = "//:base_plt",
-    tags = ["dialyze"],
+    dialyzer_opts = RABBITMQ_DIALYZER_OPTS + ["-Wno_undefined_callbacks"],
+    plt = ":base_plt",
+    warnings_as_errors = False,
 )
 
 broker_for_integration_suites()
 
-erlc(
+rabbitmq_test_helper(
     name = "rabbit_auth_backend_mqtt_mock",
-    testonly = True,
     srcs = [
         "test/rabbit_auth_backend_mqtt_mock.erl",
     ],
-    dest = "test",
-    erlc_opts = RABBITMQ_TEST_ERLC_OPTS,
     deps = [
-        "//deps/rabbit_common:bazel_erlang_lib",
+        "//deps/rabbit_common:erlang_app",
     ],
 )
 
@@ -103,8 +103,9 @@ suites = [
         additional_beam = [
             ":rabbit_auth_backend_mqtt_mock",
         ],
+        flaky = True,
         runtime_deps = [
-            "@emqttc//:bazel_erlang_lib",
+            "@emqtt//:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -113,14 +114,14 @@ suites = [
         size = "large",
         flaky = True,
         runtime_deps = [
-            "@emqttc//:bazel_erlang_lib",
+            "@emqtt//:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
         PACKAGE,
         name = "command_SUITE",
         runtime_deps = [
-            "@emqttc//:bazel_erlang_lib",
+            "@emqtt//:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -140,8 +141,8 @@ suites = [
         name = "processor_SUITE",
         size = "small",
         deps = [
-            "//deps/amqp_client:bazel_erlang_lib",
-            "//deps/rabbit_common:bazel_erlang_lib",
+            "//deps/amqp_client:erlang_app",
+            "//deps/rabbit_common:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -152,14 +153,14 @@ suites = [
         PACKAGE,
         name = "reader_SUITE",
         runtime_deps = [
-            "@emqttc//:bazel_erlang_lib",
+            "@emqtt//:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
         PACKAGE,
         name = "retainer_SUITE",
         runtime_deps = [
-            "@emqttc//:bazel_erlang_lib",
+            "@emqtt//:erlang_app",
         ],
     ),
     rabbitmq_suite(

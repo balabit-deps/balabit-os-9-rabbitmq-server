@@ -15,12 +15,6 @@ EUNIT_OPTS = no_tty, {report, {eunit_progress, [colored, profile]}}
 DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
-# FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
-# reviewed and merged.
-
-ERLANG_MK_REPO = https://github.com/rabbitmq/erlang.mk.git
-ERLANG_MK_COMMIT = rabbitmq-tmp
-
 ifneq ($(DISABLE_METRICS_COLLECTOR),)
 RABBITMQ_CONFIG_FILE = $(CURDIR)/rabbitmq-disable-metrics-collector.conf
 export RABBITMQ_CONFIG_FILE
@@ -76,41 +70,3 @@ qq: # Make RabbitMQ-Quorum-Queues-Raft panels come alive - HIGH LOAD
 .PHONY: dist-metrics
 dist-metrics: # Make inet_tcp_metrics come alive
 	@$(DOCKER_COMPOSE_UP)
-
-JQ := /usr/local/bin/jq
-$(JQ):
-	@brew install jq
-
-# Defined as explicit, individual targets so that autocompletion works
-DASHBOARDS_TO_PATH := $(CURDIR)/docker/grafana/dashboards
-define GENERATE_DASHBOARD
-cd $(DASHBOARDS_TO_PATH) \
-&& $(JQ) --slurp add $(@F) ../__inputs.json \
-| $(JQ) '.templating.list[].datasource = "$${DS_PROMETHEUS}"' \
-| $(JQ) '.panels[].datasource = "$${DS_PROMETHEUS}"'
-endef
-.PHONY: Erlang-Distribution.json
-Erlang-Distribution.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: Erlang-Memory-Allocators.json
-Erlang-Memory-Allocators.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: Erlang-Distributions-Compare.json
-Erlang-Distributions-Compare.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: RabbitMQ-Overview.json
-RabbitMQ-Overview.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: RabbitMQ-PerfTest.json
-RabbitMQ-PerfTest.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: RabbitMQ-Quorum-Queues-Raft.json
-RabbitMQ-Quorum-Queues-Raft.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: rabbitmq-exporter_vs_rabbitmq-prometheus.json
-rabbitmq-exporter_vs_rabbitmq-prometheus.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-.PHONY: RabbitMQ-Stream.json
-RabbitMQ-Stream.json: $(JQ)
-	@$(GENERATE_DASHBOARD)
-

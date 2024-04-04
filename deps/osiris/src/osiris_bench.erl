@@ -2,12 +2,13 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2007-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(osiris_bench).
 
 -include("osiris.hrl").
+-include("osiris_peer_shim.hrl").
 
 -export([run/1,
          stop/1,
@@ -39,7 +40,7 @@ run(#{name := Name} = Spec) ->
     Dir = filename:join([Dir0, ?MODULE, Name]),
     %% create cluster (if needed)
     [LeaderNode | Replicas] =
-        Nodes = [start_slave(N, Dir) || N <- [s1, s2, s3]],
+        Nodes = [start_secondary(N, Dir) || N <- [s1, s2, s3]],
 
     %% declare osiris cluster
     Conf0 =
@@ -62,8 +63,21 @@ run(#{name := Name} = Spec) ->
                     #{leader => Leader2, in_flight => InFlight}),
     Nodes.
 
-stop(Nodes) ->
-    [slave:stop(N) || N <- Nodes].
+stop(Nodes) when is_list(Nodes) ->
+    [stop_peer(N) || N <- Nodes].
+
+-if(?OTP_RELEASE >= 25).
+stop_peer(RefOrName) ->
+    %% peer:stop/1 not idempotent
+    try
+        ?PEER_MODULE:stop(RefOrName)
+    catch exit:_:_Stacktrace ->
+        ok
+    end.
+-else.
+stop_peer(RefOrName) ->
+    ?PEER_MODULE:stop(RefOrName).
+-endif.
 
 start_publisher(Node, Conf) ->
     erlang:spawn(Node, ?MODULE, do_publish, [Conf]).
@@ -90,41 +104,56 @@ do_metrics(O0) ->
     O = osiris_counters:overview(),
     O1 = maps:with(
              maps:keys(O0), O),
-    maps:map(fun(K, CC) ->
-                M = element(1, K),
-                N = element(2, K),
-                %% get last counters
-                CL = maps:get(K, O0),
-                Rates =
-                    maps:fold(fun(F, V, Acc) ->
-                                 LV = maps:get(F, CL),
-                                 [{F, (V - LV) / ?METRICS_INT_S} | Acc]
-                              end,
-                              [], CC),
-                io:format("~s: ~s/~s - Rates ~w~n~n", [node(), M, N, Rates])
-             end,
-             O1),
+    _ = maps:map(
+          fun(K, CC) ->
+                  M = element(1, K),
+                  N = element(2, K),
+                  %% get last counters
+                  CL = maps:get(K, O0),
+                  Rates =
+                      maps:fold(fun(F, V, Acc) ->
+                                        LV = maps:get(F, CL),
+                                        [{F, (V - LV) / ?METRICS_INT_S} | Acc]
+                                end,
+                                [], CC),
+                  io:format("~s: ~s/~s - Rates ~w~n~n", [node(), M, N, Rates])
+          end,
+          O1),
     timer:sleep(?METRICS_INT_S * 1000),
     do_metrics(O).
 
-start_slave(N, RunDir) ->
-    Dir0 = filename:join(RunDir, N),
+start_secondary(NodeName, RunDir) ->
+    Dir0 = filename:join(RunDir, NodeName),
     Host = get_current_host(),
     Dir = "'\"" ++ Dir0 ++ "\"'",
-    Pa = string:join(["-pa" | search_paths()]
-                     ++ ["-osiris data_dir", Dir],
-                     " "),
-    ?INFO("osiris_bench: starting slave node with ~s~n", [Pa]),
-    {ok, S} = slave:start_link(Host, N, Pa),
-    ?INFO("osiris_bench: started slave node ~w ~w~n", [S, Host]),
-    Res = rpc:call(S, application, ensure_all_started, [osiris]),
-    ok = rpc:call(S, logger, set_primary_config, [level, all]),
+    Args = ["-pa" | search_paths()] ++ ["-osiris data_dir", Dir],
+    ?INFO("osiris_bench: starting child node ~p with ~s~n", [NodeName, Args]),
+    {ok, N} = start_peer_node(Host, NodeName, Args),
+    ?INFO("osiris_bench: started child node ~w ~w~n", [N, Host]),
+    Res = rpc:call(N, application, ensure_all_started, [osiris]),
+    ok = rpc:call(N, logger, set_primary_config, [level, all]),
     ?INFO("osiris_bench: application start result ~p", [Res]),
-    S.
+    N.
+
+
+-if(?OTP_RELEASE >= 25).
+start_peer_node(Host, NodeName, Args) when is_atom(NodeName) ->
+    Opts = #{
+        name => string:trim(atom_to_list(NodeName)),
+        host => Host,
+        args => Args
+    },
+    {ok, _Pid, Node} = ?PEER_MODULE:start_link(Opts),
+    {ok, Node}.
+-else.
+start_peer_node(Host, NodeName, Args) when is_atom(NodeName) ->
+    ArgString = string:join(Args, " "),
+    ?PEER_MODULE:start_link(Host, NodeName, ArgString).
+-endif.
 
 get_current_host() ->
     {ok, H} = inet:gethostname(),
-    list_to_atom(H).
+    H.
 
 search_paths() ->
     Ld = code:lib_dir(),

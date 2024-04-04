@@ -11,6 +11,11 @@ UMask=0027
 NotifyAccess=all
 TimeoutStartSec=600
 LimitNOFILE=65536
+# ERL_MAX_PORTS can be used to further limit the number of concurrent client
+# connections. It should be equal or less than LimitNOFILE, and be a power of 2.
+# If not defined, the startup script will set ERL_MAX_PORTS to the value of
+# LimitNOFILE. An example is below.
+# Environment="ERL_MAX_PORTS=16384"
 SyslogIdentifier=rabbitmq
 Restart=on-failure
 RestartSec=10

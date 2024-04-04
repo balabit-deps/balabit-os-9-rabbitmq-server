@@ -101,7 +101,7 @@
 -spec start_link(Mod, Args) -> Result when
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Mod, Args) ->
     gen:start(?MODULE, link, Mod, {[], Args}, []).
 
@@ -112,7 +112,7 @@ start_link(Mod, Args) ->
              undefined,
      Mod :: module(),
      Args :: term(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Name, Mod, Args) ->
     gen_start(Name, Mod, Args, []).
 
@@ -124,7 +124,7 @@ start_link(Name, Mod, Args) ->
      Mod :: module(),
      Args :: term(),
      Options :: list(),
-     Result ::  {ok,pid()} | {error, {already_started, pid()}}.
+     Result ::  {ok,pid()} | {error, Reason :: term()}.
 start_link(Name, Mod, Args, Opts0) ->
     gen_start(Name, Mod, Args, Opts0).
 
@@ -267,14 +267,17 @@ loop_wait(#state{config = #config{hibernate_after = Hib}} = State00, Parent) ->
                      State00
              end,
     receive
-        {system, From, Request} ->
-            sys:handle_system_msg(Request, From, Parent,
-                                  ?MODULE, State0#state.debug, State0);
-        {'EXIT', Parent, Reason} ->
-            terminate(Reason, State0),
-            exit(Reason);
         Msg ->
-            enter_loop_batched(Msg, Parent, State0)
+            case Msg of
+                {system, From, Request} ->
+                    sys:handle_system_msg(Request, From, Parent,
+                                          ?MODULE, State0#state.debug, State0);
+                {'EXIT', Parent, Reason} ->
+                    terminate(Reason, State0),
+                    exit(Reason);
+                _ ->
+                    enter_loop_batched(Msg, Parent, State0)
+            end
     after Hib ->
               proc_lib:hibernate(?MODULE, ?FUNCTION_NAME, [State0, Parent])
     end.
@@ -318,14 +321,17 @@ loop_batched(#state{config = #config{batch_size = BatchSize,
               Parent);
 loop_batched(#state{debug = Debug} = State0, Parent) ->
     receive
-        {system, From, Request} ->
-            sys:handle_system_msg(Request, From, Parent,
-                                  ?MODULE, Debug, State0);
-        {'EXIT', Parent, Reason} ->
-            terminate(Reason, State0),
-            exit(Reason);
         Msg ->
-            enter_loop_batched(Msg, Parent, State0)
+            case Msg of
+                {system, From, Request} ->
+                    sys:handle_system_msg(Request, From, Parent,
+                                          ?MODULE, Debug, State0);
+                {'EXIT', Parent, Reason} ->
+                    terminate(Reason, State0),
+                    exit(Reason);
+                _ ->
+                    enter_loop_batched(Msg, Parent, State0)
+            end
     after 0 ->
               State = complete_batch(State0),
               Config = State#state.config,

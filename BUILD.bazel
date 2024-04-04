@@ -1,38 +1,42 @@
+load(
+    "@bazel_skylib//rules:common_settings.bzl",
+    "bool_flag",
+    "string_flag",
+)
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
-load("@bazel-erlang//:dialyze.bzl", "plt")
-load("@bazel-erlang//:shell.bzl", "shell")
-load("elixir_home.bzl", "elixir_home")
+load("@rules_erlang//:dialyze.bzl", "plt")
+load("@rules_erlang//:shell.bzl", "shell")
+load("@rules_erlang//:erl_eval.bzl", "erl_eval")
+load("//bazel/elixir:iex_eval.bzl", "iex_eval")
 load(":rabbitmq_home.bzl", "rabbitmq_home")
 load(":rabbitmq_run.bzl", "rabbitmq_run", "rabbitmq_run_command")
 load(":rabbitmqctl.bzl", "rabbitmqctl")
-load(":rabbitmq.bzl", "ALL_PLUGINS", "APP_VERSION")
-load(":dist.bzl", "collect_licenses", "versioned_rabbitmq_home")
+load(":dist.bzl", "package_generic_unix", "source_archive")
+load(":rabbitmq.bzl", "all_plugins")
 
 exports_files([
     "scripts/bazel/rabbitmq-run.sh",
+    "scripts/bazel/rabbitmq-run.bat",
+    "release-notes",
 ])
 
-# This allows us to
-# `bazel build //my/target \
-#    --//:elixir_home=/path/to/elixir/installation`
-elixir_home(
-    name = "elixir_home",
-    build_setting_default = "~/.kiex/elixirs/elixir-1.10.4",
+bool_flag(
+    name = "enable_test_build",
+    build_setting_default = False,
     visibility = ["//visibility:public"],
 )
 
-platform(
-    name = "erlang_git_platform",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:x86_64",
-        "@bazel_tools//tools/cpp:clang",
-    ],
-    exec_properties = {
-        "OSFamily": "Linux",
-        # linux-erlang-git-master
-        "container-image": "docker://pivotalrabbitmq/rabbitmq-server-buildenv@sha256:5d4fa38f723186668a497a8ee57e22010187e9347add5d4a7cc199dc13f1493f",
+config_setting(
+    name = "test_build",
+    flag_values = {
+        "//:enable_test_build": "true",
     },
+)
+
+string_flag(
+    name = "elixir_home",
+    build_setting_default = "",
+    visibility = ["//visibility:public"],
 )
 
 plt(
@@ -40,54 +44,13 @@ plt(
     visibility = ["//visibility:public"],
 )
 
-rabbitmq_home(
-    name = "broker-home",
-    plugins = [
-        "//deps/rabbit:bazel_erlang_lib",
-        "//deps/rabbitmq_amqp1_0:bazel_erlang_lib",
-        "//deps/rabbitmq_auth_backend_cache:bazel_erlang_lib",
-        "//deps/rabbitmq_auth_backend_http:bazel_erlang_lib",
-        "//deps/rabbitmq_auth_backend_ldap:bazel_erlang_lib",
-        "//deps/rabbitmq_auth_backend_oauth2:bazel_erlang_lib",
-        "//deps/rabbitmq_auth_mechanism_ssl:bazel_erlang_lib",
-        "//deps/rabbitmq_consistent_hash_exchange:bazel_erlang_lib",
-        "//deps/rabbitmq_event_exchange:bazel_erlang_lib",
-        "//deps/rabbitmq_federation:bazel_erlang_lib",
-        "//deps/rabbitmq_federation_management:bazel_erlang_lib",
-        "//deps/rabbitmq_jms_topic_exchange:bazel_erlang_lib",
-        "//deps/rabbitmq_management:bazel_erlang_lib",
-        "//deps/rabbitmq_mqtt:bazel_erlang_lib",
-        "//deps/rabbitmq_peer_discovery_aws:bazel_erlang_lib",
-        "//deps/rabbitmq_peer_discovery_consul:bazel_erlang_lib",
-        "//deps/rabbitmq_peer_discovery_etcd:bazel_erlang_lib",
-        "//deps/rabbitmq_peer_discovery_k8s:bazel_erlang_lib",
-        "//deps/rabbitmq_prometheus:bazel_erlang_lib",
-        "//deps/rabbitmq_random_exchange:bazel_erlang_lib",
-        "//deps/rabbitmq_recent_history_exchange:bazel_erlang_lib",
-        "//deps/rabbitmq_sharding:bazel_erlang_lib",
-        "//deps/rabbitmq_shovel:bazel_erlang_lib",
-        "//deps/rabbitmq_shovel_management:bazel_erlang_lib",
-        "//deps/rabbitmq_stomp:bazel_erlang_lib",
-        "//deps/rabbitmq_stream:bazel_erlang_lib",
-        "//deps/rabbitmq_stream_management:bazel_erlang_lib",
-        "//deps/rabbitmq_top:bazel_erlang_lib",
-        "//deps/rabbitmq_tracing:bazel_erlang_lib",
-        "//deps/rabbitmq_trust_store:bazel_erlang_lib",
-        "//deps/rabbitmq_web_dispatch:bazel_erlang_lib",
-        "//deps/rabbitmq_web_mqtt:bazel_erlang_lib",
-        "//deps/rabbitmq_web_stomp:bazel_erlang_lib",
-    ],
+PLUGINS = all_plugins(
+    rabbitmq_workspace = "",
 )
 
 rabbitmq_home(
-    name = "broker-for-cli-tests-home",
-    testonly = True,
-    plugins = [
-        "//deps/rabbit:bazel_erlang_lib",
-        "//deps/rabbitmq_federation:bazel_erlang_lib",
-        "//deps/rabbitmq_stomp:bazel_erlang_lib",
-        "//deps/amqp_client:bazel_erlang_lib",
-    ],
+    name = "broker-home",
+    plugins = PLUGINS,
 )
 
 rabbitmq_run(
@@ -96,20 +59,28 @@ rabbitmq_run(
     visibility = ["//visibility:public"],
 )
 
-rabbitmq_run(
-    name = "rabbitmq-for-cli-tests-run",
-    testonly = True,
-    home = ":broker-for-cli-tests-home",
-    visibility = ["//visibility:public"],
-)
-
 # Allow us to `bazel run broker`
 # for the equivalent of `make run-broker`
-# (though it as of yet includes no plugins)
 rabbitmq_run_command(
     name = "broker",
     rabbitmq_run = ":rabbitmq-run",
     subcommand = "run-broker",
+)
+
+# Allow us to `bazel run start-cluster`
+# for the equivalent of `make start-cluster`
+rabbitmq_run_command(
+    name = "start-cluster",
+    rabbitmq_run = ":rabbitmq-run",
+    subcommand = "start-cluster",
+)
+
+# Allow us to `bazel run stop-cluster`
+# for the equivalent of `make stop-cluster`
+rabbitmq_run_command(
+    name = "stop-cluster",
+    rabbitmq_run = ":rabbitmq-run",
+    subcommand = "stop-cluster",
 )
 
 # `bazel run rabbitmqctl`
@@ -129,13 +100,30 @@ rabbitmqctl(
     home = ":broker-home",
 )
 
-shell(
-    name = "repl",
-    deps = ALL_PLUGINS,
+rabbitmqctl(
+    name = "rabbitmq-streams",
+    home = ":broker-home",
 )
 
-collect_licenses(
-    name = "licenses",
+shell(
+    name = "repl",
+    deps = PLUGINS,
+)
+
+erl_eval(
+    name = "otp_version",
+    outs = ["otp_version.txt"],
+    expression = """{ok, Version} = file:read_file(filename:join([code:root_dir(), "releases", erlang:system_info(otp_release), "OTP_VERSION"])), file:write_file(os:getenv("OUTS"), Version), halt().""",
+)
+
+iex_eval(
+    name = "elixir_version",
+    outs = ["elixir_version.txt"],
+    expression = """File.write!(System.get_env("OUTS"), System.version()); System.halt()""",
+)
+
+filegroup(
+    name = "root-licenses",
     srcs = glob(
         ["LICENSE*"],
         exclude = [
@@ -143,25 +131,11 @@ collect_licenses(
             "LICENSE.txt",
         ],
     ),
-    deps = ALL_PLUGINS,
-)
-
-versioned_rabbitmq_home(
-    name = "dist-home",
-    plugins = ALL_PLUGINS,
-)
-
-pkg_tar(
-    name = "license-files",
-    srcs = [
-        ":licenses",
-        "//deps/rabbit:INSTALL",
-    ],
     visibility = ["//visibility:public"],
 )
 
 pkg_tar(
-    name = "scripts",
+    name = "scripts-tar",
     srcs = [
         "scripts/bash_autocomplete.sh",
         "scripts/rabbitmq-script-wrapper",
@@ -173,7 +147,7 @@ pkg_tar(
 )
 
 pkg_tar(
-    name = "release-notes",
+    name = "release-notes-tar",
     srcs = glob([
         "release-notes/*.md",
         "release-notes/*.txt",
@@ -182,19 +156,166 @@ pkg_tar(
     visibility = ["//visibility:public"],
 )
 
-pkg_tar(
-    name = "package-generic-unix",
-    srcs = [
-        ":dist-home",
-    ],
-    extension = "tar.xz",
-    package_dir = "rabbitmq_server-{}".format(APP_VERSION),
-    strip_prefix = "dist-home",
-    visibility = ["//visibility:public"],
-    deps = [
-        ":license-files",
-        ":release-notes",
-        ":scripts",
-        "//deps/rabbit:manpages-dir",
-    ],
+package_generic_unix(
+    plugins = PLUGINS,
+    rabbitmq_workspace = "@",
+)
+
+source_archive(
+    plugins = PLUGINS,
+    rabbitmq_workspace = "@",
+)
+
+genrule(
+    name = "test-logs",
+    outs = ["open-test-logs.sh"],
+    cmd = """set -euo pipefail
+cat << 'EOF' > $@
+#!/bin/bash
+set -euo pipefail
+if [ $$# -eq 0 ]; then
+    echo "Usage: bazel run test-logs TEST_LABEL [shard_index]"
+    exit 1
+fi
+
+RELATIVE=$${1#//}
+PACKAGE=$${RELATIVE%%:*}
+SUITE=$${RELATIVE##*:}
+OUTPUT_DIR=test.outputs
+
+if [ $$# -gt 1 ]; then
+    OUTPUT_DIR=shard_$$2_of_*/test.outputs
+fi
+
+if [ ! -d "bazel-testlogs/$$PACKAGE/$$SUITE/"$$OUTPUT_DIR ]; then
+    echo "Test output dir not found, perhaps shard_index needed?"
+    echo "Usage: bazel run test-logs TEST_LABEL [shard_index]"
+    exit 1
+fi
+
+cd "bazel-testlogs/$$PACKAGE/$$SUITE/"$$OUTPUT_DIR
+if [ -f outputs.zip ]; then
+    unzip -u outputs.zip
+fi
+set +e
+open index.html
+rc=$$?
+set -e
+if [[ $$rc -eq 3 ]]; then
+  # For xdg-open exit code 3 means "A required tool could not be found." That is, there is no browser.
+  echo "Open your browser at http://$$(hostname -s):8000/index.html"
+  python -m http.server 8000
+fi
+EOF
+""",
+    executable = True,
+)
+
+genrule(
+    name = "remote-test-logs",
+    outs = ["open-remote-test-logs.sh"],
+    cmd = """set -euo pipefail
+cat << 'EOF' > $@
+#!/bin/bash
+set -euo pipefail
+if [ $$# -eq 0 ]; then
+    echo "Usage: bazel run remote-test-logs TEST_LABEL [shard_index]"
+    exit 1
+fi
+
+RELATIVE=$${1#//}
+PACKAGE=$${RELATIVE%%:*}
+SUITE=$${RELATIVE##*:}
+OUTPUT_DIR=test.outputs
+if [ $$# -gt 1 ]; then
+    OUTPUT_DIR=shard_$$2_of_*/test.outputs
+fi
+
+TESTLOGS=$$(echo $$(bazel info output_path)/k8-*/testlogs)
+
+if [ ! -d "$$TESTLOGS/$$PACKAGE/$$SUITE/$$OUTPUT_DIR" ]; then
+    echo "Test output dir not found, perhaps shard_index needed?"
+    echo "Usage: bazel run remote-test-logs TEST_LABEL [shard_index]"
+    exit 1
+fi
+
+cd "$$TESTLOGS/$$PACKAGE/$$SUITE/$$OUTPUT_DIR" && unzip -u outputs.zip
+open index.html
+EOF
+""",
+    executable = True,
+)
+
+genrule(
+    name = "test-node-data",
+    outs = ["open-test-node-data.sh"],
+    cmd = """set -euo pipefail
+cat << 'EOF' > $@
+    set -euo pipefail
+    if [ $$# -eq 0 ]; then
+        echo "Usage: bazel run test-node-data TEST_LABEL [shard_index]"
+        exit 1
+    fi
+
+    RELATIVE=$${1#//}
+    PACKAGE=$${RELATIVE%%:*}
+    SUITE=$${RELATIVE##*:}
+    OUTPUT_DIR=test.outputs
+    if [ $$# -gt 1 ]; then
+        OUTPUT_DIR=shard_$$2_of_*/test.outputs
+    fi
+
+    if [ ! -d "bazel-testlogs/$$PACKAGE/$$SUITE/"$$OUTPUT_DIR ]; then
+        echo "Test output dir not found, perhaps shard_index needed?"
+        echo "Usage: bazel run test-node-data TEST_LABEL [shard_index]"
+        exit 1
+    fi
+
+    cd bazel-testlogs/$$PACKAGE/$$SUITE/$$OUTPUT_DIR
+    if [ -f outputs.zip ]; then
+        unzip -u outputs.zip
+    fi
+    open index.html
+    open ct_run.*/deps.*/run.*/log_private
+EOF
+""",
+    executable = True,
+)
+
+# NOTE: this rule may not work properly if --remote_download_minimal has been used,
+#       which is currently the default for remote runs
+genrule(
+    name = "remote-test-node-data",
+    outs = ["open-remote-test-node-data.sh"],
+    cmd = """set -euo pipefail
+cat << 'EOF' > $@
+    set -euo pipefail
+    if [ $$# -eq 0 ]; then
+        echo "Usage: bazel run remote-test-node-data TEST_LABEL [shard_index]"
+        exit 1
+    fi
+
+    RELATIVE=$${1#//}
+    PACKAGE=$${RELATIVE%%:*}
+    SUITE=$${RELATIVE##*:}
+    OUTPUT_DIR=test.outputs
+
+    if [ $$# -gt 1 ]; then
+        OUTPUT_DIR=shard_$$2_of_*/test.outputs
+    fi
+
+    TESTLOGS=$$(echo $$(bazel info output_path)/k8-*/testlogs)
+
+    if [ ! -d $$TESTLOGS/$$PACKAGE/$$SUITE/$$OUTPUT_DIR ]; then
+        echo "Test output dir not found, perhaps shard_index needed?"
+        echo "Usage: bazel run remote-test-node-data TEST_LABEL [shard_index]"
+        exit 1
+    fi
+
+    cd $$TESTLOGS/$$PACKAGE/$$SUITE/$$OUTPUT_DIR && unzip -u outputs.zip
+    open index.html
+    open ct_run.*/deps.*/run.*/log_private
+EOF
+""",
+    executable = True,
 )

@@ -111,7 +111,7 @@ internal_check_user_login(Username, Fun) ->
             case Fun(User) of
                 true -> {ok, #auth_user{username = Username,
                                         tags     = Tags,
-                                        impl     = none}};
+                                        impl     = fun() -> none end}};
                 _    -> Refused
             end;
         {error, not_found} ->
@@ -435,7 +435,10 @@ change_password_hash(Username, PasswordHash) ->
 
 
 change_password_hash(Username, PasswordHash, HashingAlgorithm) ->
-    update_user_with_hash(Username, PasswordHash, HashingAlgorithm, [], undefined).
+    update_user(Username,
+                fun(User) ->
+                        internal_user:set_password_hash(User, PasswordHash, HashingAlgorithm)
+                end).
 
 update_user_with_hash(Username, PasswordHash, HashingAlgorithm, ConvertedTags, Limits) ->
     update_user(Username,
@@ -446,10 +449,7 @@ update_user_with_hash(Username, PasswordHash, HashingAlgorithm, ConvertedTags, L
                                     undefined -> User1;
                                     _         -> internal_user:update_limits(add, User1, Limits)
                                 end,
-                        case ConvertedTags of
-                            [] -> User2;
-                            _  -> internal_user:set_tags(User2, ConvertedTags)
-                        end
+                        internal_user:set_tags(User2, ConvertedTags)
                 end).
 
 -spec set_tags(rabbit_types:username(), [atom()], rabbit_types:username()) -> 'ok'.

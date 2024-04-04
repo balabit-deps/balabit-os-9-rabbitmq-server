@@ -9,7 +9,7 @@
 
 -include("eetcd.hrl").
 
--spec new(Name, Path) -> {ok, GunPid, Http2Ref} when
+-spec new(Name, Path) -> {ok, GunPid, Http2Ref} | {error, eetcd:eetcd_error()} when
     Name :: name(),
     Path :: iodata(),
     GunPid :: pid(),
@@ -22,11 +22,12 @@ new(Name, Path) ->
         Err -> Err
     end.
 
--spec new(Name, EtcdMsg, EtcdMsgName, Http2Path) -> Http2Ref when
+-spec new(Name, EtcdMsg, EtcdMsgName, Http2Path) -> {ok, GunPid, Http2Ref} | {error, eetcd:eetcd_error()} when
     Name :: name(),
     EtcdMsg :: map(),
     EtcdMsgName :: atom(),
     Http2Path :: iodata(),
+    GunPid :: pid(),
     Http2Ref :: reference().
 new(Name, Msg, MsgName, Path) ->
     case new(Name, Path) of
@@ -36,12 +37,12 @@ new(Name, Msg, MsgName, Path) ->
         Err -> Err
     end.
 
--spec data(GunPid, Http2Ref, EtcdMsg, EtcdMsgName, Http2Path) -> Http2Ref when
+-spec data(GunPid, Http2Ref, EtcdMsg, EtcdMsgName, IsFin) -> Http2Ref when
     GunPid :: pid(),
     Http2Ref :: reference(),
     EtcdMsg :: map(),
     EtcdMsgName :: atom(),
-    Http2Path :: iodata().
+    IsFin :: fin | nofin.
 data(Pid, Ref, Msg, MsgName, IsFin) ->
     EncodeBody = eetcd_grpc:encode(identity, Msg, MsgName),
     gun:data(Pid, Ref, IsFin, EncodeBody),
@@ -139,6 +140,7 @@ await_body(ServerPid, StreamRef, Timeout, MRef, Acc) ->
         {gun_data, ServerPid, StreamRef, fin, Data} ->
             {ok, <<Acc/binary, Data/binary>>};
     %% It's OK to return trailers here because the client specifically requested them
+    %% Trailers are grpc_status and grpc_message headers
         {gun_trailers, ServerPid, StreamRef, Trailers} ->
             {ok, Acc, Trailers};
         {gun_error, ServerPid, StreamRef, Reason} ->

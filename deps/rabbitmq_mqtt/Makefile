@@ -31,20 +31,18 @@ define PROJECT_APP_EXTRA_KEYS
 	{broker_version_requirements, []}
 endef
 
+# We do not need QUIC as dependency of emqtt.
+BUILD_WITHOUT_QUIC=1
+export BUILD_WITHOUT_QUIC
+
 DEPS = ranch rabbit_common rabbit amqp_client ra
-TEST_DEPS = emqttc ct_helper rabbitmq_ct_helpers rabbitmq_ct_client_helpers
+TEST_DEPS = emqtt ct_helper rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 
 dep_ct_helper = git https://github.com/extend/ct_helper.git master
-dep_emqttc = git https://github.com/rabbitmq/emqttc.git remove-logging
+dep_emqtt = git https://github.com/emqx/emqtt.git 1.7.0-rc.2
 
 DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
-
-# FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
-# reviewed and merged.
-
-ERLANG_MK_REPO = https://github.com/rabbitmq/erlang.mk.git
-ERLANG_MK_COMMIT = rabbitmq-tmp
 
 include ../../rabbitmq-components.mk
 include ../../erlang.mk

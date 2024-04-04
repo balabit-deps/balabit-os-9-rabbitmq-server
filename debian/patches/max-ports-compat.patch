@@ -1,0 +1,32 @@
+Description: adjust ERL_MAX_PORTS according to the kernel file handle limit
+ In v3.9.23, upstream changed how it handles the maximum concurrent client
+ connections. Instead of using the effective kernel open file handle limit, it
+ now has a default of 65536, which can be changed by the ERL_MAX_PORTS
+ environment variable. See https://github.com/rabbitmq/rabbitmq-server/releases/tag/v3.9.23 for details.
+ .
+ With this patch, we are attempting to keep the same behavior as previous
+ versions by following the kernel file handle limit, unless there is an
+ ERL_MAX_PORTS variable set.
+Author: Andreas Hasenack <andeas.hasenack@canonical.com>
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/rabbitmq-server/+bug/2060248
+Forwarded: no
+Last-Update: 2024-06-28
+
+diff --git a/deps/rabbit/scripts/rabbitmq-env b/deps/rabbit/scripts/rabbitmq-env
+index 1c7ed764..d1938527 100755
+--- a/deps/rabbit/scripts/rabbitmq-env
++++ b/deps/rabbit/scripts/rabbitmq-env
+@@ -108,7 +108,12 @@ fi
+ # Default is defined here:
+ # https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_port.h
+ if [ -z "$ERL_MAX_PORTS" ]; then
+-    export ERL_MAX_PORTS=65536
++    nofile=$(ulimit -n) # soft limit, could be defined in the systemd unit file via LimitNOFILE
++    if [ -n "${nofile}" ]; then
++        export ERL_MAX_PORTS="${nofile}"
++    else
++        export ERL_MAX_PORTS=65536
++    fi
+ fi
+ 
+ [ -n "$ERL_EPMD_PORT" ] && export ERL_EPMD_PORT

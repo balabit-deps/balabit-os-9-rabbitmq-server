@@ -1,2 +1,22 @@
 Tests: smoke-test
 Restrictions: superficial, isolation-container
+
+Tests: hello-world
+Restrictions: isolation-container, needs-root, allow-stderr
+Depends: rabbitmq-server,
+         python3-pika
+
+Tests: work-queue
+Restrictions: isolation-container, needs-root, allow-stderr
+Depends: rabbitmq-server,
+         python3-pika
+
+Tests: publish-subscribe
+Restrictions: isolation-container, needs-root, allow-stderr
+Depends: rabbitmq-server,
+         python3-pika
+
+Tests: rpc
+Restrictions: isolation-container, needs-root, allow-stderr
+Depends: rabbitmq-server,
+         python3-pika

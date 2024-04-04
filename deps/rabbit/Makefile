@@ -113,7 +113,7 @@ define PROJECT_ENV
 	    {vhost_restart_strategy, continue},
 	    %% {global, prefetch count}
 	    {default_consumer_prefetch, {false, 0}},
-		%% interval at which the channel can perform periodic actions
+		  %% interval at which the channel can perform periodic actions
 	    {channel_tick_interval, 60000},
 	    %% Default max message size is 128 MB
 	    {max_message_size, 134217728},
@@ -122,7 +122,10 @@ define PROJECT_ENV
 	    %% interval at which connection/channel tracking executes post operations
 	    {tracking_execution_timeout, 15000},
 	    {stream_messages_soft_limit, 256},
-        {track_auth_attempt_source, false}
+      {track_auth_attempt_source, false},
+			{credentials_obfuscation_fallback_secret, <<"nocookie">>},
+			%% EOL date for the current release series, if known/announced
+			{release_series_eol_date, none}
 	  ]
 endef
 
@@ -142,7 +145,7 @@ TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers amqp_client meck prop
 PLT_APPS += mnesia
 
 dep_syslog = git https://github.com/schlagert/syslog 4.0.0
-dep_osiris = git https://github.com/rabbitmq/osiris v1.2.4
+dep_osiris = git https://github.com/rabbitmq/osiris v1.2.6
 dep_systemd = hex 0.6.1
 dep_seshat = git https://github.com/rabbitmq/seshat 0.1.0
 
@@ -160,12 +163,6 @@ DEP_PLUGINS = rabbit_common/mk/rabbitmq-build.mk \
 	      rabbit_common/mk/rabbitmq-run.mk \
 	      rabbit_common/mk/rabbitmq-test.mk \
 	      rabbit_common/mk/rabbitmq-tools.mk
-
-# FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
-# reviewed and merged.
-
-ERLANG_MK_REPO = https://github.com/rabbitmq/erlang.mk.git
-ERLANG_MK_COMMIT = rabbitmq-tmp
 
 include ../../rabbitmq-components.mk
 include ../../erlang.mk
@@ -257,6 +254,10 @@ endif
 
 ifdef DEBUG_FF
 RMQ_ERLC_OPTS += -DDEBUG_QUORUM_QUEUE_FF=true
+endif
+
+ifdef TRACE_SUPERVISOR2
+RMQ_ERLC_OPTS += -DTRACE_SUPERVISOR2=true
 endif
 
 ifndef USE_PROPER_QC

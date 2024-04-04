@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_log).
@@ -17,6 +17,7 @@
          append_sync/2,
          write_sync/2,
          take/3,
+         sparse_read/2,
          last_index_term/1,
          set_last_index/2,
          handle_event/2,
@@ -126,8 +127,7 @@
              ]).
 
 pre_init(#{uid := UId,
-           system_config := #{data_dir := DataDir}
-          } = Conf) ->
+           system_config := #{data_dir := DataDir}} = Conf) ->
     Dir = server_data_dir(DataDir, UId),
     SnapModule = maps:get(snapshot_module, Conf, ?DEFAULT_SNAPSHOT_MODULE),
     SnapshotsDir = filename:join(Dir, "snapshots"),
@@ -232,7 +232,7 @@ close(#?MODULE{cfg = #cfg{uid = UId},
     _ = ra_log_reader:close(Reader),
     %% delete ra_log_metrics record
     catch ets:delete(ra_log_metrics, UId),
-    %% inserted in ra_snapshot but it doesn't havea terminate callback so
+    %% inserted in ra_snapshot but it doesn't have a terminate callback so
     %% deleting ets table here
     catch ets:delete(ra_log_snapshot_state, UId),
     ok.
@@ -271,7 +271,6 @@ write([{FstIdx, _, _} = First | Rest] = Entries,
             % are not going to receive any entries prior to the snapshot
             State0 = wal_truncate_write(State00, First),
             % write the rest normally
-            % TODO: batch api for wal
             write_entries(Rest, State0);
         _ ->
             write_entries(Entries, State00)
@@ -307,6 +306,49 @@ take(Start, Num, #?MODULE{cfg = Cfg,
     end;
 take(_, _, State) ->
     {[], 0, State}.
+
+
+%% read a list of indexes,
+%% found indexes be returned in the same order as the input list of indexes
+-spec sparse_read([ra_index()], state()) ->
+    {[log_entry()], state()}.
+sparse_read(Indexes0, #?MODULE{cfg = Cfg,
+                               reader = Reader0,
+                               last_index = LastIdx,
+                               cache = Cache} = State) ->
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_OPS, 1),
+    %% indexes need to be sorted high -> low for correct and efficient reading
+    Sort = ra_lib:lists_detect_sort(Indexes0),
+    Indexes1 = case Sort of
+                   unsorted ->
+                       lists:sort(fun erlang:'>'/2, Indexes0);
+                   ascending ->
+                       lists:reverse(Indexes0);
+                   _ ->
+                       % descending or undefined
+                       Indexes0
+               end,
+
+    %% drop any indexes that are larger than the last index available
+    Indexes2 = lists:dropwhile(fun (I) -> I > LastIdx end, Indexes1),
+    {Entries0, CacheNumRead, Indexes} = cache_read_sparse(Indexes2, Cache, []),
+    ok = incr_counter(Cfg, ?C_RA_LOG_READ_CACHE, CacheNumRead),
+    {Entries1, Reader} = ra_log_reader:sparse_read(Reader0, Indexes, Entries0),
+    %% here we recover the original order of indexes
+    Entries = case Sort of
+                  descending ->
+                      lists:reverse(Entries1);
+                  unsorted ->
+                      Lookup = lists:foldl(
+                                 fun ({I, _, _} = E, Acc) ->
+                                         maps:put(I, E, Acc)
+                                 end, #{}, Entries1),
+                      maps_with_values(Indexes0, Lookup);
+                  _ ->
+                      %% nothing to do for ascending or undefined
+                      Entries1
+              end,
+    {Entries, State#?MODULE{reader = Reader}}.
 
 -spec last_index_term(state()) -> ra_idxterm().
 last_index_term(#?MODULE{last_index = LastIdx, last_term = LastTerm}) ->
@@ -348,7 +390,7 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
                       last_index = LastIdx,
                       snapshot_state = SnapState} = State0)
   when FromIdx =< LastWrittenIdx0 + 1 ->
-    MaybeCurrent = ra_snapshot:current(SnapState),
+    MaybeCurrentSnap = ra_snapshot:current(SnapState),
     % We need to ignore any written events for the same index
     % but in a prior term if we do not we may end up confirming
     % to a leader writes that have not yet
@@ -358,13 +400,11 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
     ToIdx = min(ToIdx0, LastIdx),
     case fetch_term(ToIdx, State0) of
         {Term, State} when is_integer(Term) ->
-            % this case truncation shouldn't be too expensive as the cache
-            % only contains the unflushed window of entries typically less than
-            % 10ms worth of entries
-            truncate_cache(FromIdx, ToIdx,
-                           State#?MODULE{last_written_index_term = {ToIdx, Term}},
-                           []);
-        {undefined, State} when FromIdx =< element(1, MaybeCurrent) ->
+            {State#?MODULE{last_written_index_term = {ToIdx, Term}},
+             %% delaying truncate_cache until the next event allows any entries
+             %% that became committed to be read from cache rather than ETS
+             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
+        {undefined, State} when FromIdx =< element(1, MaybeCurrentSnap) ->
             % A snapshot happened before the written event came in
             % This can only happen on a leader when consensus is achieved by
             % followers returning appending the entry and the leader committing
@@ -372,7 +412,8 @@ handle_event({written, {FromIdx, ToIdx0, Term}},
             % ensure last_written_index_term does not go backwards
             LastWrittenIdxTerm = {max(LastWrittenIdx0, ToIdx),
                                   max(LastWrittenTerm0, Term)},
-            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm}, []};
+            {State#?MODULE{last_written_index_term = LastWrittenIdxTerm},
+             [{next_event, {ra_log_event, {truncate_cache, FromIdx, ToIdx}}}]};
         {OtherTerm, State} ->
             ?DEBUG("~s: written event did not find term ~b for index ~b "
                    "found ~w",
@@ -388,6 +429,8 @@ handle_event({written, {FromIdx, _, _}},
     ?DEBUG("~s: ra_log: written gap detected at ~b expected ~b!",
            [LogId, FromIdx, Expected]),
     {resend_from(Expected, State0), []};
+handle_event({truncate_cache, FromIdx, ToIdx}, State) ->
+    truncate_cache(FromIdx, ToIdx, State, []);
 handle_event({segments, Tid, NewSegs},
              #?MODULE{cfg = #cfg{names = Names},
                       reader = Reader0,
@@ -396,8 +439,6 @@ handle_event({segments, Tid, NewSegs},
     Active = lists:takewhile(fun ({_, _, _, _, T}) -> T =/= Tid end,
                              ClosedTables),
     Reader = ra_log_reader:update_segments(NewSegs, Reader0),
-    % compact seg ref list so that only the latest range for a segment
-    % file has an entry
     State = State0#?MODULE{reader = Reader},
     % not fast but we rarely should have more than one or two closed tables
     % at any time
@@ -431,10 +472,13 @@ handle_event({segments, Tid, NewSegs},
                         end),
             {State, log_update_effects(Readers, Pid, State)}
     end;
-handle_event({snapshot_written, {Idx, _} = Snap},
-             #?MODULE{snapshot_state = SnapState0} = State0) ->
+handle_event({snapshot_written, {SnapIdx, _} = Snap},
+             #?MODULE{first_index = FstIdx,
+                      snapshot_state = SnapState0} = State0)
+%% only update snapshot if it is newer than the last snapshot
+  when SnapIdx >= FstIdx ->
     % delete any segments outside of first_index
-    {State, Effects0} = delete_segments(Idx, State0),
+    {State, Effects0} = delete_segments(SnapIdx, State0),
     SnapState = ra_snapshot:complete_snapshot(Snap, SnapState0),
     %% delete old snapshot files
     %% This is done as an effect
@@ -445,8 +489,20 @@ handle_event({snapshot_written, {Idx, _} = Snap},
                 ra_snapshot:current(SnapState0)} | Effects0],
     %% do not set last written index here as the snapshot may
     %% be for a past index
-    {State#?MODULE{first_index = Idx + 1,
+    {State#?MODULE{first_index = SnapIdx + 1,
                    snapshot_state = SnapState}, Effects};
+handle_event({snapshot_written, {Idx, Term} = Snap},
+             #?MODULE{cfg =#cfg{log_id = LogId},
+                      snapshot_state = SnapState} = State0) ->
+    %% if the snapshot is stale we just want to delete it
+    Current = ra_snapshot:current(SnapState),
+    ?INFO("~s: old snapshot_written received for index ~b in term ~b
+          current snapshot ~w, deleting old snapshot",
+           [LogId, Idx, Term, Current]),
+    Effects = [{delete_snapshot,
+                ra_snapshot:directory(SnapState),
+                Snap}],
+    {State0, Effects};
 handle_event({resend_write, Idx}, State) ->
     % resend missing entries from cache.
     % The assumption is they are available in the cache
@@ -495,13 +551,13 @@ set_snapshot_state(SnapState, State) ->
 
 -spec install_snapshot(ra_idxterm(), ra_snapshot:state(), state()) ->
     {state(), effects()}.
-install_snapshot({Idx, _} = IdxTerm, SnapState,
+install_snapshot({SnapIdx, _} = IdxTerm, SnapState,
                  #?MODULE{cfg = Cfg} = State0) ->
     ok = incr_counter(Cfg, ?C_RA_LOG_SNAPSHOTS_INSTALLED, 1),
-    {State, Effs} = delete_segments(Idx, State0),
+    {State, Effs} = delete_segments(SnapIdx, State0),
     {State#?MODULE{snapshot_state = SnapState,
-                   first_index = Idx + 1,
-                   last_index = Idx,
+                   first_index = SnapIdx + 1,
+                   last_index = SnapIdx,
                    %% TODO: update last_term too?
                    %% cache can go
                    cache = #{},
@@ -713,8 +769,8 @@ log_update_effects(Pids, ReplyPid, #?MODULE{first_index = Idx,
       [ra_event, local]} || P <- Pids].
 
 
-%% deletes all segments where the last index is lower or equal to
-%% the Idx argumement
+%% deletes all segments where the last index is lower than
+%% the Idx argument
 delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
                                          segment_writer = SegWriter,
                                          uid = UId},
@@ -732,8 +788,8 @@ delete_segments(Idx, #?MODULE{cfg = #cfg{log_id = LogId,
                                                                          UId, Pivot)
                     end),
             Active = ra_log_reader:segment_refs(Reader),
-            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b",
-                   [LogId, length(Obsolete), Idx, length(Active)]),
+            ?DEBUG("~s: ~b obsolete segments at ~b - remaining: ~b, pivot ~w",
+                   [LogId, length(Obsolete), Idx, length(Active), Pivot]),
             State = State0#?MODULE{reader = Reader},
             {State, log_update_effects(Readers, Pid, State)}
     end.
@@ -769,9 +825,9 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
                 Entries) ->
     WriterId = {UId, self()},
     {WalCommands, Num, Cache} =
-        lists:foldl(fun ({Idx, Term, Data}, {WC, N, C0}) ->
+        lists:foldl(fun ({Idx, Term, Data} = Entry, {WC, N, C0}) ->
                             WalC = {append, WriterId, Idx, Term, Data},
-                            {[WalC | WC], N+1, C0#{Idx => {Idx, Term, Data}}}
+                            {[WalC | WC], N+1, C0#{Idx => Entry}}
                     end, {[], 0, Cache0}, Entries),
 
     [{_, _, LastIdx, LastTerm, _} | _] = WalCommands,
@@ -787,18 +843,28 @@ wal_write_batch(#?MODULE{cfg = #cfg{uid = UId,
 
 truncate_cache(FromIdx, ToIdx,
                #?MODULE{cache = Cache0,
+                        last_written_index_term = {LastWrittenIdx, _},
                         last_index = LastIdx} = State,
                Effects) ->
-    Cache = case ToIdx - FromIdx < LastIdx - ToIdx of
+    NeededCacheSize = LastIdx - LastWrittenIdx,
+    Cache = case NeededCacheSize > map_size(Cache0) div 2 of
                 true ->
                     %% if the range to be deleted is smaller than the
                     %% remaining range truncate the cache by removing entries
                     cache_without(FromIdx, ToIdx, Cache0);
                 false ->
                     %% if there are fewer entries left than to be removed
-                    %% extract the remaning entries
-                    cache_with(ToIdx + 1, LastIdx, Cache0, #{})
+                    %% extract the remaining entries
+                    cache_with(LastWrittenIdx + 1, LastIdx, Cache0, #{})
             end,
+
+    %% assert cache size, leave commented out
+    % case map_size(Cache) of
+    %     NeededCacheSize -> ok;
+    %     CacheSize ->
+    %         exit({invalid_cache_size, CacheSize, NeededCacheSize})
+    % end,
+
     {State#?MODULE{cache = Cache}, Effects}.
 
 cache_with(FromIdx, ToIdx, _, Cache)
@@ -844,12 +910,27 @@ cache_take0(Next, Last, Cache, Acc) ->
             Acc
     end.
 
+cache_read_sparse(Indexes, Cache, Acc) ->
+    cache_read_sparse(Indexes, Cache, 0, Acc).
+
+cache_read_sparse([], _Cache, Num, Acc) ->
+    {Acc, Num, []}; %% no reminder
+cache_read_sparse([Next | Rem] = Indexes, Cache, Num, Acc) ->
+    case Cache of
+        #{Next := Entry} ->
+            cache_read_sparse(Rem, Cache, Num + 1, [Entry | Acc]);
+        _ ->
+            {Acc, Num, Indexes}
+    end.
+
 maybe_append_first_entry(State0 = #?MODULE{last_index = -1}) ->
     State = append({0, 0, undefined}, State0),
     receive
         {ra_log_event, {written, {0, 0, 0}}} -> ok
     end,
-    State#?MODULE{first_index = 0, last_written_index_term = {0, 0}};
+    State#?MODULE{first_index = 0,
+                  cache = #{},
+                  last_written_index_term = {0, 0}};
 maybe_append_first_entry(State) ->
     State.
 
@@ -961,7 +1042,7 @@ pick_range([{Fst, _Lst} | Tail], {CurFst, CurLst}) ->
     pick_range(Tail, {min(Fst, CurFst), CurLst}).
 
 
-%% TODO: implent synchronous writes using gen_batch_server:call/3
+%% TODO: implement synchronous writes using gen_batch_server:call/3
 await_written_idx(Idx, Term, Log0) ->
     receive
         {ra_log_event, {written, {_, Idx, Term}} = Evt} ->
@@ -993,6 +1074,18 @@ incr_counter(#cfg{counter = undefined}, _Ix, _N) ->
 server_data_dir(Dir, UId) ->
     Me = ra_lib:to_list(UId),
     filename:join(Dir, Me).
+
+maps_with_values(Keys, Map) ->
+    lists:foldr(
+      fun (K, Acc) ->
+              case Map of
+                  #{K := Value} ->
+                      [Value | Acc];
+                  _ ->
+                      Acc
+              end
+      end, [], Keys).
+
 %%%% TESTS
 
 -ifdef(TEST).

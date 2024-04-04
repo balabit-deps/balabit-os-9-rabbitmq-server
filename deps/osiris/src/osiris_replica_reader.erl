@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2007-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(osiris_replica_reader).
@@ -57,7 +57,7 @@ maybe_connect(tcp, [H | T], Port, Options) ->
         {ok, Sock} ->
             {ok, Sock, H};
         {error, _} ->
-            ?WARN("osiris replica connection refused, host:~p - port: ~p", [H, Port]),
+            ?DEBUG("osiris replica connection refused, host:~p - port: ~p", [H, Port]),
             maybe_connect(tcp, T, Port, Options)
     end;
 maybe_connect(ssl, [H | T], Port, Options) ->
@@ -69,10 +69,11 @@ maybe_connect(ssl, [H | T], Port, Options) ->
         {ok, Sock} ->
             {ok, Sock, H};
         {error, {tls_alert, {handshake_failure, _}}} ->
-            ?WARN("osiris replica TLS connection refused, host:~p - port: ~p", [H, Port]),
+            ?DEBUG("osiris replica TLS connection refused (handshake failure), host:~p - port: ~p",
+                  [H, Port]),
             maybe_connect(ssl, T, Port, Options);
         {error, E} ->
-            ?WARN("osiris replica TLS connection refused, host:~p - port: ~p", [H, Port]),
+            ?DEBUG("osiris replica TLS connection refused, host:~p - port: ~p", [H, Port]),
             ?DEBUG("error while trying to establish TLS connection ~p", [E]),
             {error, connection_refused}
     end.
@@ -124,17 +125,17 @@ init(#{hosts := Hosts,
        leader_pid := LeaderPid,
        start_offset := {StartOffset, _} = TailInfo,
        reference := ExtRef,
-       connection_token := Token} =
-         Args) ->
+       connection_token := Token}) ->
     process_flag(trap_exit, true),
 
     SndBuf = 146988 * 10,
-    ?DEBUG("trying to connect replica to ~p", [Hosts]),
+    ?DEBUG("trying to connect to replica at ~p", [Hosts]),
 
     case maybe_connect(Transport, Hosts, Port,
                        [binary, {packet, 0}, {nodelay, true}, {sndbuf, SndBuf}])
     of
         {ok, Sock, Host} ->
+            ?DEBUG("successfully connected to host ~p", [Host]),
             CntId = {?MODULE, ExtRef, Host, Port},
             CntSpec = {CntId, ?COUNTER_FIELDS},
             Config = #{counter_spec => CntSpec, transport => Transport},
@@ -143,8 +144,8 @@ init(#{hosts := Hosts,
                 {ok, Log} =
                     osiris_writer:init_data_reader(LeaderPid, TailInfo, Config),
                 CntRef = osiris_log:counters_ref(Log),
-                ?INFO("starting replica reader ~s at offset ~b Args: ~p",
-                      [Name, osiris_log:next_offset(Log), Args]),
+                ?INFO("starting osiris replica reader ~s at offset ~b",
+                      [Name, osiris_log:next_offset(Log)]),
 
                 ok = send(Transport, Sock, Token),
                 %% register data listener with osiris_proc
@@ -160,6 +161,7 @@ init(#{hosts := Hosts,
                                                        leader_monitor_ref = MRef,
                                                        counter = CntRef,
                                                        counter_id = CntId}),
+                ?DEBUG("sent committed offset information to the leader at ~p", [LeaderPid]),
                 {ok, State}
             catch
                 exit:{noproc, _} ->
@@ -167,6 +169,7 @@ init(#{hosts := Hosts,
                     {stop, writer_unavailable}
             end;
         {error, Reason} ->
+            ?WARN("could not connect osiris to replica at ~p", [Hosts]),
             {stop, Reason}
     end.
 

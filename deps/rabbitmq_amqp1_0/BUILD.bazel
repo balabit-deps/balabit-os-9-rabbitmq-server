@@ -1,12 +1,13 @@
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load(
     "//:rabbitmq.bzl",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
     "assert_suites",
     "broker_for_integration_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
     "rabbitmq_suite",
 )
 
@@ -25,18 +26,19 @@ BUILD_DEPS = [
 ]
 
 DEPS = [
-    "//deps/rabbit_common:bazel_erlang_lib",
-    "//deps/amqp_client:bazel_erlang_lib",
-    "//deps/amqp10_common:bazel_erlang_lib",
+    "//deps/rabbit_common:erlang_app",
+    "//deps/amqp_client:erlang_app",
+    "//deps/amqp10_common:erlang_app",
 ]
 
 RUNTIME_DEPS = [
-    "//deps/rabbit:bazel_erlang_lib",
+    "//deps/rabbit:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
     app_env = APP_ENV,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_name = APP_NAME,
     build_deps = BUILD_DEPS,
     runtime_deps = RUNTIME_DEPS,
@@ -44,15 +46,21 @@ rabbitmq_lib(
 )
 
 xref(
-    size = "small",
-    tags = ["xref"],
+    additional_libs = BUILD_DEPS,
+)
+
+plt(
+    name = "base_plt",
+    # this ought to include BUILD_DEPS, but not sure how to
+    # get dialyze of elixir code working yet
+    deps = DEPS,
 )
 
 dialyze(
     size = "medium",
-    dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
-    plt = "//:base_plt",
-    tags = ["dialyze"],
+    dialyzer_opts = RABBITMQ_DIALYZER_OPTS + ["-Wno_undefined_callbacks"],
+    plt = ":base_plt",
+    warnings_as_errors = False,
 )
 
 broker_for_integration_suites()
@@ -65,15 +73,18 @@ suites = [
         name = "amqp10_client_SUITE",
         size = "medium",
         runtime_deps = [
-            "//deps/amqp10_client:bazel_erlang_lib",
+            "//deps/amqp10_client:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
         PACKAGE,
         name = "command_SUITE",
         size = "medium",
+        runtime_deps = [
+            "//deps/amqp10_client:erlang_app",
+        ],
         deps = [
-            "//deps/amqp10_common:bazel_erlang_lib",
+            "//deps/amqp10_common:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -88,6 +99,7 @@ suites = [
         flaky = True,
         tags = [
             "dotnet",
+            "exclusive",
         ],
         test_env = {
             "TMPDIR": "$TEST_TMPDIR",
@@ -97,7 +109,7 @@ suites = [
         name = "unit_SUITE",
         size = "small",
         deps = [
-            "//deps/amqp10_common:bazel_erlang_lib",
+            "//deps/amqp10_common:erlang_app",
         ],
     ),
 ]

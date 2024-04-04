@@ -32,6 +32,7 @@
          credit/5,
          dequeue/5,
          fold_state/3,
+         find_name_from_pid/2,
          is_policy_applicable/2,
          is_server_named_allowed/1,
          notify_decorators/1
@@ -274,6 +275,11 @@ info(Q, Items) ->
 fold_state(Fun, Acc, #?STATE{ctxs = Ctxs}) ->
     maps:fold(Fun, Acc, Ctxs).
 
+%% slight hack to help provide backwards compatibility in the channel
+%% better than scanning the entire queue state
+find_name_from_pid(Pid, #?STATE{monitor_registry = Mons}) ->
+    maps:get(Pid, Mons, undefined).
+
 state_info(#ctx{state = S,
                 module = Mod}) ->
     Mod:state_info(S);
@@ -515,7 +521,8 @@ credit(Q, CTag, Credit, Drain, Ctxs) ->
 -spec dequeue(amqqueue:amqqueue(), boolean(),
               pid(), rabbit_types:ctag(), state()) ->
     {ok, non_neg_integer(), term(), state()}  |
-    {empty, state()}.
+    {empty, state()} | rabbit_types:error(term()) |
+    {protocol_error, Type :: atom(), Reason :: string(), Args :: term()}.
 dequeue(Q, NoAck, LimiterPid, CTag, Ctxs) ->
     #ctx{state = State0} = Ctx = get_ctx(Q, Ctxs),
     Mod = amqqueue:get_type(Q),
@@ -526,6 +533,8 @@ dequeue(Q, NoAck, LimiterPid, CTag, Ctxs) ->
             {empty, set_ctx(Q, Ctx#ctx{state = State}, Ctxs)};
         {error, _} = Err ->
             Err;
+        {timeout, _} = Err ->
+            {error, Err};
         {protocol_error, _, _, _} = Err ->
             Err
     end.

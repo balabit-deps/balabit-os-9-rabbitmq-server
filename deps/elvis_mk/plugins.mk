@@ -4,15 +4,19 @@
 .PHONY: elvis distclean-elvis
 
 # Configuration.
-ELVIS_VERSION=0.2.11
+ELVIS_VERSION ?= 1.1.0
 ELVIS_CONFIG ?= $(CURDIR)/elvis.config
 
 ELVIS ?= $(CURDIR)/elvis
 export ELVIS
 
-ELVIS_URL ?= https://github.com/inaka/elvis/releases/download/$(ELVIS_VERSION)/elvis
-ELVIS_CONFIG_URL ?= https://github.com/inaka/elvis/releases/download/$(ELVIS_VERSION)/elvis.config
+ELVIS_URL ?= https://github.com/inaka/elvis/archive/refs/tags/$(ELVIS_VERSION).tar.gz
 ELVIS_OPTS ?=
+ELVIS_BUILD_DIR ?= $(CURDIR)/_build
+ELVIS_CODE_ARCHIVE = $(ELVIS_VERSION).tar.gz
+
+ELVIS_REBAR3_URL ?= https://s3.amazonaws.com/rebar3/rebar3
+ELVIS_REBAR3 ?= rebar3
 
 # Core targets.
 
@@ -23,16 +27,31 @@ help::
 
 distclean:: distclean-elvis
 
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
 # Plugin-specific targets.
 
 $(ELVIS):
-	$(gen_verbose) $(call core_http_get,$(ELVIS),$(ELVIS_URL))
+	$(verbose) mkdir -p $(ELVIS_BUILD_DIR)
+	$(verbose) echo "Downloading Elvis from: "$(ELVIS_URL)
+	$(verbose) $(call core_http_get,$(ELVIS_BUILD_DIR)/$(ELVIS_CODE_ARCHIVE),$(ELVIS_URL))
+	$(verbose) cd $(ELVIS_BUILD_DIR) && \
+		tar -xzf $(ELVIS_CODE_ARCHIVE) && \
+		cd elvis-$(ELVIS_VERSION) && \
+		export ELVIS_BUILD_DIR=$(ELVIS_BUILD_DIR) && \
+		export ELVIS_REBAR3_URL=$(ELVIS_REBAR3_URL) && \
+		export ELVIS_REBAR3=$(ELVIS_REBAR3) && \
+		$(MAKEFILE_DIR)/rebar3.sh escriptize
+	$(gen_verbose) cp $(ELVIS_BUILD_DIR)/elvis-$(ELVIS_VERSION)/_build/default/bin/elvis $(ELVIS)
+	$(gen_verbose) [ -e $(ELVIS_CONFIG) ] || \
+		cp -n $(ELVIS_BUILD_DIR)/elvis-$(ELVIS_VERSION)/elvis.config $(ELVIS_CONFIG)
 	$(verbose) chmod +x $(ELVIS)
+	$(verbose) rm -rf $(ELVIS_BUILD_DIR)/elvis-$(ELVIS_VERSION)
+	$(verbose) rm $(ELVIS_BUILD_DIR)/$(ELVIS_CODE_ARCHIVE)
+	$(verbose) rm -f $(ELVIS_BUILD_DIR)/rebar3
+	$(verbose) find $(ELVIS_BUILD_DIR) -maxdepth 0 -empty -exec rmdir "{}" ";"
 
-$(ELVIS_CONFIG):
-	$(verbose) $(call core_http_get,$(ELVIS_CONFIG),$(ELVIS_CONFIG_URL))
-
-elvis: $(ELVIS) $(ELVIS_CONFIG)
+elvis: $(ELVIS)
 	$(verbose) $(ELVIS) rock -c $(ELVIS_CONFIG) $(ELVIS_OPTS)
 
 distclean-elvis:

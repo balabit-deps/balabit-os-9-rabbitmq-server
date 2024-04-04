@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2020 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -type maybe(T) :: undefined | T.
 
@@ -61,6 +61,10 @@
 -type chunk_flag() :: next | last.
 
 -type consistent_query_ref() :: {From :: term(), Query :: ra:query_fun(), ConmmitIndex :: ra_index()}.
+
+-type safe_call_ret(T) :: timeout | {error, noproc | nodedown} | T.
+
+-type states() :: leader | follower | candidate | await_condition.
 
 -define(RA_PROTO_VERSION, 1).
 %% the protocol version should be incremented whenever extensions need to be
@@ -167,6 +171,11 @@
 -define(WAL_RECOVERY_CHUNK_SIZE, 33554432).
 
 %% logging shim
+-define(DEBUG_IF(Bool, Fmt, Args),
+        case Bool of
+            true -> ?DISPATCH_LOG(debug, Fmt, Args);
+            false -> ok
+        end).
 -define(DEBUG(Fmt, Args), ?DISPATCH_LOG(debug, Fmt, Args)).
 -define(INFO(Fmt, Args), ?DISPATCH_LOG(info, Fmt, Args)).
 -define(NOTICE(Fmt, Args), ?DISPATCH_LOG(notice, Fmt, Args)).

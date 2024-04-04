@@ -24,7 +24,7 @@ Visualize Erlang/Elixir Nodes On The Command Line base on [recon](https://github
 %% rebar.config
 {deps, [observer_cli]}
 %% erlang.mk
-dep_observer_cli = hex 1.7.1
+dep_observer_cli = hex 1.7.3
 ```
 **Elixir**
 ```elixir
@@ -103,10 +103,10 @@ start() -> observer_cli:start_plugin().
 ```
 2. Write observer_cli_plugin behaviour.
 observer_cli_plugin has 3 callbacks.
-   
+
 2.1 attributes.
 ```erlang
--callback atributes(PrevState) -> {[Rows], NewState} when
+-callback attributes(PrevState) -> {[Rows], NewState} when
     Rows :: #{content => string()|integer()|{byte, pos_integer()},
               width => pos_integer(), color => binary()}.
 ```
@@ -223,6 +223,10 @@ Support F/B to page up/down.
 
 ----------------
 ### Changelog
+- 1.7.3
+  - fix system pane exception by `ps` command.
+- 1.7.2
+  - Fix error when inspecting process that monitors via {RegName, Node}.
 - 1.7.1
   - application view show starting/loading/startPfalse/loaded/started application.
   - fixed badarg when staring by rpc and stop by `ctrl+c`.
@@ -240,7 +244,7 @@ Support F/B to page up/down.
    - hidden schedule usage default
    - format by erlformat
    - add `ps -o pcpu,pmem,rss,vsz` information
-   - remove recon_alloc:memory/1 from `HOME`(too much cpu usage)   
+   - remove recon_alloc:memory/1 from `HOME`(too much cpu usage)
 - 1.5.4
   - Bump Recon to 2.5.1 for otp23 alloc compat.
 - 1.5.2

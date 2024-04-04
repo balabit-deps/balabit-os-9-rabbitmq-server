@@ -1,0 +1,48 @@
+#!/bin/sh
+
+# Reset rabbitmq
+rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl start_app
+
+cat << EOF > receive_logs.py
+#!/usr/bin/env python3
+import pika
+
+connection = pika.BlockingConnection(
+    pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+
+channel.exchange_declare(exchange='logs', exchange_type='fanout')
+
+result = channel.queue_declare(queue='', exclusive=True)
+queue_name = result.method.queue
+
+channel.queue_bind(exchange='logs', queue=queue_name)
+
+print(' [*] Waiting for logs. To exit press CTRL+C')
+
+def callback(ch, method, properties, body):
+    print(f" [x] {body}")
+
+channel.basic_consume(
+    queue=queue_name, on_message_callback=callback, auto_ack=True)
+
+channel.start_consuming()
+EOF
+
+# create 2 consumers
+python3 receive_logs.py &
+python3 receive_logs.py &
+
+# the consumers are listed in the bindings.
+# # rabbitmqctl list_bindings | grep logs
+# logs	exchange	amq.gen-9cej1xIy-VQLf6d3UXvU1w	queue	amq.gen-9cej1xIy-VQLf6d3UXvU1w	[]
+# logs	exchange	amq.gen-H-ky4z3jFxa5UxpigJAD0g	queue	amq.gen-H-ky4z3jFxa5UxpigJAD0g	[]
+rabbitmqctl list_bindings # print for debug
+if [ $(rabbitmqctl list_bindings | grep "logs" | awk '{print $1}' | wc -l) -eq 2 ]; then
+    echo "The number of consumers is 2."
+else
+    echo "The number of consumers is not 2."
+    exit 1
+fi

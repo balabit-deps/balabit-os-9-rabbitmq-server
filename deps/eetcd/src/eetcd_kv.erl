@@ -62,7 +62,7 @@ with_range_end(Context, End) ->
 
 %% @doc Limit the number of results to return from `get' request.
 %% If with_limit is given a 0 limit, it is treated as no limit.
--spec with_limit(context(), iodata()) -> context().
+-spec with_limit(context(), non_neg_integer()) -> context().
 with_limit(Context, End) ->
     maps:put(limit, End, Context).
 
@@ -168,7 +168,7 @@ with_top(Context, SortTarget, SortOrder) ->
 with_prev_kv(Context) ->
     maps:put(prev_kv, true, Context).
 
-%% @doc Attache a lease ID to a key in `put' request.
+%% @doc Attach a lease ID to a key in `put' request.
 -spec with_lease(context(), integer()) -> context().
 with_lease(Context, Id) when is_integer(Id) ->
     maps:put(lease, Id, Context).

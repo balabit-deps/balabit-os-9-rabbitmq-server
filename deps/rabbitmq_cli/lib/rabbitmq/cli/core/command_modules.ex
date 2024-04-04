@@ -5,7 +5,7 @@
 ## Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
 
 defmodule RabbitMQ.CLI.Core.CommandModules do
-  alias RabbitMQ.CLI.Core.Config
+  alias RabbitMQ.CLI.Core.{Config, DataCoercion}
   alias RabbitMQ.CLI.Plugins.Helpers, as: PluginsHelpers
   alias RabbitMQ.CLI.CommandBehaviour
 
@@ -37,7 +37,7 @@ defmodule RabbitMQ.CLI.Core.CommandModules do
 
   def script_scope(opts) do
     scopes = Application.get_env(:rabbitmqctl, :scopes, [])
-    scopes[Config.get_option(:script_name, opts)] || :none
+    scopes[DataCoercion.to_atom(Config.get_option(:script_name, opts))] || :none
   end
 
   def load_commands_core(scope) do
@@ -74,8 +74,31 @@ defmodule RabbitMQ.CLI.Core.CommandModules do
           []
       end
 
+    all_plugins = PluginsHelpers.list(opts)
+    enabled_with_dep = :rabbit_plugins.dependencies(false, enabled_plugins, all_plugins)
+
+    all_enabled_plugins =
+      Enum.flat_map(
+        all_plugins,
+        fn plugin ->
+          name = PluginsHelpers.plugin_name(plugin)
+
+          strictly_member =
+            :rabbit_plugins.is_strictly_plugin(plugin) and
+              Enum.member?(enabled_with_dep, name)
+
+          case strictly_member do
+            true ->
+              [name]
+
+            false ->
+              []
+          end
+        end
+      )
+
     partitioned =
-      Enum.group_by(enabled_plugins, fn app ->
+      Enum.group_by(all_enabled_plugins, fn app ->
         case Application.load(app) do
           :ok -> :loaded
           {:error, {:already_loaded, ^app}} -> :loaded
@@ -189,6 +212,7 @@ defmodule RabbitMQ.CLI.Core.CommandModules do
         |> to_snake_case
         |> String.to_atom()
         |> List.wrap()
+
       scopes ->
         scopes
     end

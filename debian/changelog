@@ -1,3 +1,48 @@
+rabbitmq-server (3.9.27-0ubuntu0.1) jammy; urgency=medium
+
+  * New upstream version 3.9.27 (LP: #2060248):
+    - In environments where DNS resolution is not yet available at the time
+      RabbitMQ nodes boot and try to perform peer discovery, such as CoreDNS
+      with default caching interval of 30s on Kubernetes, nodes now will
+      retry hostname resolution (including of their own host) several times
+      with a wait interval.
+    - LDAP server password could end up in the logs in certain types of
+      exceptions.
+    - Details about these and many futher changes can be found at
+      https://github.com/rabbitmq/rabbitmq-server/blob/main/release-notes/3.9.27.md
+      and earlier versions in the same folder.
+  * Added new dep8 tests (LP: #1679386):
+    - d/t/hello-world
+    - d/t/publish-subscribe
+    - d/t/rpc
+    - d/t/work-queue
+  * Packaging changes needed by this update:
+    - d/watch: update to find upstream tarball, and verify its signature.
+    - d/upstream/signing-key.asc: added, downloaded from
+      https://github.com/rabbitmq/signing-keys/releases/download/3.0/rabbitmq-release-signing-key.asc
+    - Remove patches fixed upstream:
+      - d/p/lp1999816-fix-rabbitmqctl-status-disk-free-timeout.patch.
+    - d/p/CVE-2023-46118-{1,2}.patch: fix fuzz.
+    - d/p/lets-use-python3-not-python-binary.patch: refresh.
+    - d/p/downgrade_elixir.patch: downgrade the allowed elixir version minimum
+      to 1.12.2 to allow Jammy to run. Upstream upgrades the minimum for general
+      compiler optimizations, but is too recent for us.
+    - d/p/max-ports-compat.patch: before v3.9.23, the maximum number of
+      concurrent client connections was set based on the kernel open file handle
+      limit. In v3.9.23 the concurrent client connection limit was changed to
+      the value of the ERL_MAX_PORTS environment variable, and defaults to 65536
+      if the variable is not set. To not change the behavior in upgrades to this
+      version, this patch sets ERL_MAX_PORTS to the kernel open file handle
+      limit if the variable is not set already. If the variable is set,
+      then it's left alone. Note that ERL_MAX_PORTS must never be higher than
+      the kernel open file handle limit.
+    - d/rabbitmq-server.service: add notice about ERL_MAX_PORTS variable.
+  * d/p/0007-Correctly-decrease-global-counters-in-rabbit_channel.patch: Fix
+    errors in rabbitmq_global_publishers and rabbitmq_global_consumers counters
+    (LP: #2073932).
+
+ -- Mitchell Dzurick <mitchell.dzurick@canonical.com>  Thu, 04 Apr 2024 12:54:06 -0700
+
 rabbitmq-server (3.9.13-1ubuntu0.22.04.2) jammy-security; urgency=medium
 
   * SECURITY UPDATE: Denial of service

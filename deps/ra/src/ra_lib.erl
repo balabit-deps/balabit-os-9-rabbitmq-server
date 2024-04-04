@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_lib).
@@ -40,10 +40,13 @@
          retry/3,
          write_file/2,
          lists_chunk/2,
+         lists_detect_sort/1,
          is_dir/1,
          is_file/1,
          ensure_dir/1,
-         consult/1
+         consult/1,
+         maps_foreach/2,
+         maps_merge_with/3
         ]).
 
 -include_lib("kernel/include/file.hrl").
@@ -199,7 +202,6 @@ throw_error(Format, Args) ->
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         "abcdefghijklmnopqrstuvwxyz"
         "0123456789_-=").
--define(UID_CHARS, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890").
 -define(UID_LENGTH, 12).
 
 -spec make_uid() -> binary().
@@ -347,6 +349,33 @@ lists_take(_N, [], Acc) ->
 lists_take(N, [H | T], Acc) ->
     lists_take(N-1, T, [H | Acc]).
 
+lists_detect_sort([]) ->
+    undefined;
+lists_detect_sort([_]) ->
+    undefined;
+lists_detect_sort([A | [A | _] = Rem]) ->
+    %% direction not determined yet
+    lists_detect_sort(Rem);
+lists_detect_sort([A, B | Rem]) when A > B ->
+    do_descending(B, Rem);
+lists_detect_sort([A, B | Rem]) when A < B ->
+    do_ascending(B, Rem).
+
+do_descending(_A, []) ->
+    descending;
+do_descending(A, [B | Rem])
+  when B =< A ->
+    do_descending(B, Rem);
+do_descending(_A, _) ->
+    unsorted.
+
+do_ascending(_A, []) ->
+    ascending;
+do_ascending(A, [B | Rem])
+  when B >= A ->
+    do_ascending(B, Rem);
+do_ascending(_A, _) ->
+    unsorted.
 
 is_dir(Dir) ->
     case prim_file:read_file_info(Dir) of
@@ -413,6 +442,46 @@ ensure_dir(F) ->
             end
     end.
 
+%% because OTP 23 support
+maps_foreach(Fun, {K, V, I}) ->
+    Fun(K, V),
+    maps_foreach(Fun, maps:next(I));
+maps_foreach(_Fun, none) ->
+    ok;
+maps_foreach(Fun, Map) when is_map(Map) ->
+    maps_foreach(Fun, maps:next(maps:iterator(Map))).
+
+%% copied from OTP to provide 23 compat, can be removed when we drop
+%% support for 23
+maps_merge_with(Combiner, Map1, Map2) when is_map(Map1),
+                                           is_map(Map2),
+                                           is_function(Combiner, 3) ->
+    case map_size(Map1) > map_size(Map2) of
+        true ->
+            Iterator = maps:iterator(Map2),
+            merge_with_1(maps:next(Iterator),
+                         Map1,
+                         Map2,
+                         Combiner);
+        false ->
+            Iterator = maps:iterator(Map1),
+            merge_with_1(maps:next(Iterator),
+                         Map2,
+                         Map1,
+                         fun(K, V1, V2) -> Combiner(K, V2, V1) end)
+    end.
+
+merge_with_1({K, V2, Iterator}, Map1, Map2, Combiner) ->
+    case Map1 of
+        #{ K := V1 } ->
+            NewMap1 = Map1#{ K := Combiner(K, V1, V2) },
+            merge_with_1(maps:next(Iterator), NewMap1, Map2, Combiner);
+        #{ } ->
+            merge_with_1(maps:next(Iterator), maps:put(K, V2, Map1), Map2, Combiner)
+    end;
+merge_with_1(none, Result, _, _) ->
+    Result.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
@@ -458,6 +527,21 @@ validate_base64uri_test() ->
 
 zeropad_test() ->
     "0000000000000037" = zpad_hex(55),
+    ok.
+
+lists_detect_sort_test() ->
+    ?assertEqual(undefined, lists_detect_sort([])),
+    ?assertEqual(undefined, lists_detect_sort([1])),
+    ?assertEqual(undefined, lists_detect_sort([1, 1])),
+    ?assertEqual(ascending, lists_detect_sort([1, 1, 2])),
+    ?assertEqual(unsorted, lists_detect_sort([1, 2, 1])),
+    ?assertEqual(unsorted, lists_detect_sort([2, 1, 2])),
+    ?assertEqual(descending, lists_detect_sort([2, 1])),
+    ?assertEqual(descending, lists_detect_sort([2, 2, 1])),
+    ?assertEqual(ascending, lists_detect_sort([1, 1, 2])),
+    ?assertEqual(ascending, lists_detect_sort([1, 2, 3, 4, 6, 6])),
+    ?assertEqual(unsorted, lists_detect_sort([1, 2, 3, 4, 6, 5])),
+
     ok.
 
 -endif.

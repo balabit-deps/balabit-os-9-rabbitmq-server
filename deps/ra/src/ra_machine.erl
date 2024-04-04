@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @doc The `ra_machine' behaviour.
 %%
@@ -124,12 +124,16 @@
     %%        If so, `To' must also include undefined
     {send_msg, To :: locator(), Msg :: term(), Options :: send_msg_opts()} |
     {mod_call, module(), Function :: atom(), [term()]} |
+    %% appends a user command to the raft log
+    {append, term()} |
+    {append, term(), ra_server:command_reply_mode()} |
     {monitor, process, pid()} |
     {monitor, node, node()} |
     {demonitor, process, pid()} |
     {demonitor, node, node()} |
     {timer, term(), non_neg_integer() | infinity} |
     {log, [ra_index()], fun(([user_command()]) -> effects())} |
+    {log, [ra_index()], fun(([user_command()]) -> effects()), {local, node()}} |
     {release_cursor, ra_index(), state()} |
     {aux, term()} |
     garbage_collection.

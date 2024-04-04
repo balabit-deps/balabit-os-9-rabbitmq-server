@@ -88,8 +88,9 @@ user_login_authorization(Username, AuthProps) ->
     end.
 
 check_vhost_access(User = #auth_user{username = Username,
-                                     impl     = #impl{user_dn = UserDN}},
+                                     impl     = ImplFun},
                    VHost, AuthzData) ->
+    UserDN = (ImplFun())#impl.user_dn,
     OptionsArgs = context_as_options(AuthzData, undefined),
     ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username, Username},
@@ -104,10 +105,11 @@ check_vhost_access(User = #auth_user{username = Username,
     R1.
 
 check_resource_access(User = #auth_user{username = Username,
-                                        impl     = #impl{user_dn = UserDN}},
+                                        impl     = ImplFun},
                       #resource{virtual_host = VHost, kind = Type, name = Name},
                       Permission,
                       AuthzContext) ->
+    UserDN = (ImplFun())#impl.user_dn,
     OptionsArgs = context_as_options(AuthzContext, undefined),
     ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username,   Username},
@@ -125,10 +127,11 @@ check_resource_access(User = #auth_user{username = Username,
     R1.
 
 check_topic_access(User = #auth_user{username = Username,
-                                     impl     = #impl{user_dn = UserDN}},
+                                     impl     = ImplFun},
                    #resource{virtual_host = VHost, kind = topic = Resource, name = Name},
                    Permission,
                    Context) ->
+    UserDN = (ImplFun())#impl.user_dn,
     OptionsArgs = context_as_options(Context, undefined),
     ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username,   Username},
@@ -220,7 +223,8 @@ evaluate0({in_group, DNPattern}, Args, User, LDAP) ->
     evaluate({in_group, DNPattern, "member"}, Args, User, LDAP);
 
 evaluate0({in_group, DNPattern, Desc}, Args,
-          #auth_user{impl = #impl{user_dn = UserDN}}, LDAP) ->
+          #auth_user{impl = ImplFun}, LDAP) ->
+    UserDN = (ImplFun())#impl.user_dn,
     Filter = eldap:equalityMatch(Desc, UserDN),
     DN = fill(DNPattern, Args),
     R = object_exists(DN, Filter, LDAP),
@@ -234,7 +238,7 @@ evaluate0({in_group_nested, DNPattern, Desc}, Args, User, LDAP) ->
     evaluate({in_group_nested, DNPattern, Desc, subtree},
              Args, User, LDAP);
 evaluate0({in_group_nested, DNPattern, Desc, Scope}, Args,
-          #auth_user{impl = #impl{user_dn = UserDN}}, LDAP) ->
+          #auth_user{impl = ImplFun}, LDAP) ->
     GroupsBase = case env(group_lookup_base) of
                      none ->
                          get_expected_env_str(dn_lookup_base, none);
@@ -250,6 +254,7 @@ evaluate0({in_group_nested, DNPattern, Desc, Scope}, Args,
             onelevel     -> eldap:singleLevel();
             one_level    -> eldap:singleLevel()
         end,
+    UserDN = (ImplFun())#impl.user_dn,
     search_nested_group(LDAP, Desc, GroupsBase, EldapScope, UserDN, GroupDN, []);
 
 evaluate0({'not', SubQuery}, Args, User, LDAP) ->
@@ -352,9 +357,15 @@ search_groups(LDAP, Desc, GroupsBase, Scope, DN) ->
             [];
         {ok, {referral, Referrals}} ->
             {error, {referrals_not_supported, Referrals}};
-        {ok, #eldap_search_result{entries = []}} ->
+        %% support #eldap_search_result before and after
+        %% https://github.com/erlang/otp/pull/5538
+        {ok, {eldap_search_result, [], _Referrals}} ->
             [];
-        {ok, #eldap_search_result{entries = Entries}} ->
+        {ok, {eldap_search_result, [], _Referrals, _Controls}}->
+            [];
+        {ok, {eldap_search_result, Entries, _Referrals}} ->
+            [ON || #eldap_entry{object_name = ON} <- Entries];
+        {ok, {eldap_search_result, Entries, _Referrals, _Controls}} ->
             [ON || #eldap_entry{object_name = ON} <- Entries]
     end.
 
@@ -438,7 +449,11 @@ object_exists(DN, Filter, LDAP) ->
                        {scope, eldap:baseObject()}]) of
         {ok, {referral, Referrals}} ->
             {error, {referrals_not_supported, Referrals}};
-        {ok, #eldap_search_result{entries = Entries}} ->
+        %% support #eldap_search_result before and after
+        %% https://github.com/erlang/otp/pull/5538
+        {ok, {eldap_search_result, Entries, _Referrals}} ->
+            length(Entries) > 0;
+        {ok, {eldap_search_result, Entries, _Referrals, _Controls}} ->
             length(Entries) > 0;
         {error, _} = E ->
             E
@@ -451,9 +466,15 @@ attribute(DN, AttributeName, LDAP) ->
                        {attributes, [AttributeName]}]) of
         {ok, {referral, Referrals}} ->
             {error, {referrals_not_supported, Referrals}};
-        {ok, #eldap_search_result{entries = E = [#eldap_entry{}|_]}} ->
+        %% support #eldap_search_result before and after
+        %% https://github.com/erlang/otp/pull/5538
+        {ok, {eldap_search_result, E = [#eldap_entry{}|_], _Referrals}} ->
             get_attributes(AttributeName, E);
-        {ok, #eldap_search_result{entries = _}} ->
+        {ok, {eldap_search_result, E = [#eldap_entry{}|_], _Referrals, _Controls}} ->
+            get_attributes(AttributeName, E);
+        {ok, {eldap_search_result, _Entries, _Referrals}} ->
+            {error, not_found};
+        {ok, {eldap_search_result, _Entries, _Referrals, _Controls}} ->
             {error, not_found};
         {error, _} = E ->
             E
@@ -609,7 +630,7 @@ get_or_create_conn(IsAnon, Servers, Opts) ->
         {ok, Conn} ->
             Timeout = rabbit_misc:pget(idle_timeout, Opts, infinity),
             %% Defer the timeout by re-setting it.
-            set_connection_timeout(Key, Timeout),
+            _ = set_connection_timeout(Key, Timeout),
             {ok, {eldap_pooled, Conn}};
         error      ->
             {Timeout, EldapOpts} = case lists:keytake(idle_timeout, 1, Opts) of
@@ -624,7 +645,7 @@ get_or_create_conn(IsAnon, Servers, Opts) ->
                 %% Non-zero timeout, put it in the pool
                 {{ok, Conn}, Timeout} ->
                     put(ldap_conns, maps:put(Key, Conn, Conns)),
-                    set_connection_timeout(Key, Timeout),
+                    _ = set_connection_timeout(Key, Timeout),
                     {ok, {eldap_pooled, Conn}};
                 {Error, _} ->
                     Error
@@ -770,8 +791,9 @@ do_login(Username, PrebindUserDN, Password, VHost, LDAP) ->
                  _       -> PrebindUserDN
              end,
     User = #auth_user{username     = Username,
-                      impl         = #impl{user_dn  = UserDN,
-                                           password = Password}},
+                      impl         = fun() -> #impl{user_dn  = UserDN,
+                                                    password = Password}
+                                     end},
     DTQ = fun (LDAPn) -> do_tag_queries(Username, UserDN, User, VHost, LDAPn) end,
     TagRes = case env(other_bind) of
                  as_user -> DTQ(LDAP);
@@ -829,10 +851,19 @@ dn_lookup(Username, LDAP) ->
                        {attributes, ["distinguishedName"]}]) of
         {ok, {referral, Referrals}} ->
             {error, {referrals_not_supported, Referrals}};
-        {ok, #eldap_search_result{entries = [#eldap_entry{object_name = DN}]}}->
+        %% support #eldap_search_result before and after
+        %% https://github.com/erlang/otp/pull/5538
+        {ok, {eldap_search_result, [#eldap_entry{object_name = DN}], _Referrals}}->
             ?L1("DN lookup: ~s -> ~s", [Username, DN]),
             DN;
-        {ok, #eldap_search_result{entries = Entries}} ->
+        {ok, {eldap_search_result, [#eldap_entry{object_name = DN}], _Referrals, _Controls}}->
+            ?L1("DN lookup: ~s -> ~s", [Username, DN]),
+            DN;
+        {ok, {eldap_search_result, Entries, _Referrals}} ->
+            rabbit_log_ldap:warning("Searching for DN for ~s, got back ~p",
+                               [Filled, Entries]),
+            Filled;
+        {ok, {eldap_search_result, Entries, _Referrals, _Controls}} ->
             rabbit_log_ldap:warning("Searching for DN for ~s, got back ~p",
                                [Filled, Entries]),
             Filled;
@@ -857,7 +888,8 @@ creds(User) -> creds(User, env(other_bind)).
 
 creds(none, as_user) ->
     {error, "'other_bind' set to 'as_user' but no password supplied"};
-creds(#auth_user{impl = #impl{user_dn = UserDN, password = PW}}, as_user) ->
+creds(#auth_user{impl = ImplFun}, as_user) ->
+    #impl{user_dn = UserDN, password = PW} = ImplFun(),
     {ok, {UserDN, PW}};
 creds(_, Creds) ->
     {ok, Creds}.

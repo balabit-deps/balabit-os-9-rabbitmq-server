@@ -3,12 +3,9 @@ Author: Yuriy Vidineev <yuriy.vidineev@revjet.com>
 Forwarded: no
 Bug-Debian: https://bugs.debian.org/964636
 Last-Update: 2020-07-22
-
-Index: rabbitmq-server/deps/rabbit_common/mk/rabbitmq-dist.mk
-===================================================================
---- rabbitmq-server.orig/deps/rabbit_common/mk/rabbitmq-dist.mk
-+++ rabbitmq-server/deps/rabbit_common/mk/rabbitmq-dist.mk
-@@ -80,8 +80,8 @@ $$(dist_$(1)_ez): $$(if $$(wildcard $(3)
+--- a/deps/rabbit_common/mk/rabbitmq-dist.mk
++++ b/deps/rabbit_common/mk/rabbitmq-dist.mk
+@@ -81,8 +81,8 @@
  ifeq ($$(shell test -f $(3)/rabbitmq-components.mk \
  	&& grep -q '^list-dist-deps::' $(3)/Makefile && echo yes),yes)
  $$(dist_$(1)_ez): $$(patsubst %,$(3)/%, \

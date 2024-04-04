@@ -1,0 +1,55 @@
+Description: Correctly decrease global counters in rabbit_channel:terminate/2
+Previously publisher counts would be decremented only if "publishing_mode" was
+set to false resulting in ever decreasing global counters.
+
+No consumer counts were decremented in terminate previously resulting in ever
+growing consumer counts.
+
+backport note: The original commit adds code to
+deps/rabbit/test/queue_type_SUITE.erl. This is not present in 3.9.X, and is
+therefore excluded from this backport as it is a test file that is not making a
+functional impact.
+Author: Michael Klishin <klishinm@vmware.com>
+Origin: backport, https://github.com/rabbitmq/rabbitmq-server/pull/6244/commits/f8a8fb749ffb49e3b36885af99b3875980cc844a
+Bug: https://github.com/rabbitmq/rabbitmq-server/issues/5462
+Bug-Ubuntu: https://bugs.launchpad.net/bugs/2073932
+Forwarded: not-needed
+Last-Update: 2024-08-06
+---
+ deps/rabbit/src/rabbit_channel.erl | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+diff --git a/deps/rabbit/src/rabbit_channel.erl b/deps/rabbit/src/rabbit_channel.erl
+index dea8566..53639bf 100644
+--- a/deps/rabbit/src/rabbit_channel.erl
++++ b/deps/rabbit/src/rabbit_channel.erl
+@@ -877,6 +877,7 @@ handle_post_hibernate(State0) ->
+ 
+ terminate(_Reason,
+           State = #ch{cfg = #conf{user = #user{username = Username}},
++                      consumer_mapping = CM,
+                       queue_states = QueueCtxs}) ->
+     _ = rabbit_queue_type:close(QueueCtxs),
+     {_Res, _State1} = notify_queues(State),
+@@ -885,6 +886,10 @@ terminate(_Reason,
+                             fun() -> emit_stats(State) end),
+     [delete_stats(Tag) || {Tag, _} <- get()],
+     maybe_decrease_global_publishers(State),
++    _ = maps:map(
++          fun (_, _) ->
++                  rabbit_global_counters:consumer_deleted(amqp091)
++          end, CM),
+     rabbit_core_metrics:channel_closed(self()),
+     rabbit_event:notify(channel_closed, [{pid, self()},
+                                          {user_who_performed_action, Username}]).
+@@ -2937,7 +2942,7 @@ maybe_increase_global_publishers(State0) ->
+     rabbit_global_counters:publisher_created(amqp091),
+     State0#ch{publishing_mode = true}.
+ 
+-maybe_decrease_global_publishers(#ch{publishing_mode = true}) ->
+-    ok;
+ maybe_decrease_global_publishers(#ch{publishing_mode = false}) ->
++    ok;
++maybe_decrease_global_publishers(#ch{publishing_mode = true}) ->
+     rabbit_global_counters:publisher_deleted(amqp091).

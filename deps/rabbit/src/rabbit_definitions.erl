@@ -134,7 +134,9 @@ all_definitions() ->
 
 -spec has_configured_definitions_to_load() -> boolean().
 has_configured_definitions_to_load() ->
-    has_configured_definitions_to_load_via_classic_option() or has_configured_definitions_to_load_via_modern_option().
+    has_configured_definitions_to_load_via_classic_option() or
+        has_configured_definitions_to_load_via_modern_option() or
+        has_configured_definitions_to_load_via_management_option().
 
 %% Retained for backwards compatibility, implicitly assumes the local filesystem source
 maybe_load_definitions(App, Key) ->
@@ -158,6 +160,13 @@ has_configured_definitions_to_load_via_modern_option() ->
 
 has_configured_definitions_to_load_via_classic_option() ->
     case application:get_env(rabbit, load_definitions) of
+        undefined   -> false;
+        {ok, none}  -> false;
+        {ok, _Path} -> true
+    end.
+
+has_configured_definitions_to_load_via_management_option() ->
+    case application:get_env(rabbitmq_management, load_definitions) of
         undefined   -> false;
         {ok, none}  -> false;
         {ok, _Path} -> true
@@ -282,6 +291,8 @@ apply_defs(Map, ActingUser, SuccessFun) when is_function(SuccessFun) ->
         ok
     catch {error, E} -> {error, E};
           exit:E     -> {error, E}
+    after
+        rabbit_runtime:gc_all_processes()
     end.
 
 -spec apply_defs(Map :: #{atom() => any()},
@@ -317,6 +328,8 @@ apply_defs(Map, ActingUser, SuccessFun, VHost) when is_binary(VHost) ->
         SuccessFun()
     catch {error, E} -> {error, format(E)};
           exit:E     -> {error, format(E)}
+    after
+        rabbit_runtime:gc_all_processes()
     end.
 
 -spec apply_defs(Map :: #{atom() => any()},
@@ -353,9 +366,18 @@ apply_defs(Map, ActingUser, SuccessFun, ErrorFun, VHost) ->
         SuccessFun()
     catch {error, E} -> ErrorFun(format(E));
           exit:E     -> ErrorFun(format(E))
+    after
+        rabbit_runtime:gc_all_processes()
     end.
 
 sequential_for_all(Category, ActingUser, Definitions, Fun) ->
+    try
+        sequential_for_all0(Category, ActingUser, Definitions, Fun)
+    after
+        rabbit_runtime:gc_all_processes()
+    end.
+
+sequential_for_all0(Category, ActingUser, Definitions, Fun) ->
     case maps:get(rabbit_data_coercion:to_atom(Category), Definitions, undefined) of
         undefined -> ok;
         List      ->
@@ -370,12 +392,26 @@ sequential_for_all(Category, ActingUser, Definitions, Fun) ->
     end.
 
 sequential_for_all(Name, ActingUser, Definitions, VHost, Fun) ->
+    try
+        sequential_for_all0(Name, ActingUser, Definitions, VHost, Fun)
+    after
+        rabbit_runtime:gc_all_processes()
+    end.
+
+sequential_for_all0(Name, ActingUser, Definitions, VHost, Fun) ->
     case maps:get(rabbit_data_coercion:to_atom(Name), Definitions, undefined) of
         undefined -> ok;
         List      -> [Fun(VHost, atomize_keys(M), ActingUser) || M <- List, is_map(M)]
     end.
 
 concurrent_for_all(Category, ActingUser, Definitions, Fun) ->
+    try
+        concurrent_for_all0(Category, ActingUser, Definitions, Fun)
+    after
+        rabbit_runtime:gc_all_processes()
+    end.
+
+concurrent_for_all0(Category, ActingUser, Definitions, Fun) ->
     case maps:get(rabbit_data_coercion:to_atom(Category), Definitions, undefined) of
         undefined -> ok;
         List      ->
@@ -390,6 +426,13 @@ concurrent_for_all(Category, ActingUser, Definitions, Fun) ->
     end.
 
 concurrent_for_all(Name, ActingUser, Definitions, VHost, Fun) ->
+    try
+        concurrent_for_all0(Name, ActingUser, Definitions, VHost, Fun)
+    after
+        rabbit_runtime:gc_all_processes()
+    end.
+
+concurrent_for_all0(Name, ActingUser, Definitions, VHost, Fun) ->
     case maps:get(rabbit_data_coercion:to_atom(Name), Definitions, undefined) of
         undefined -> ok;
         List      ->
@@ -553,12 +596,17 @@ add_queue_int(_Queue, R = #resource{kind = queue,
     rabbit_log:warning("Skipping import of a queue whose name begins with 'amq.', "
                        "name: ~s, acting user: ~s", [Name, ActingUser]);
 add_queue_int(Queue, Name, ActingUser) ->
-    rabbit_amqqueue:declare(Name,
-                            maps:get(durable,                         Queue, undefined),
-                            maps:get(auto_delete,                     Queue, undefined),
-                            args(maps:get(arguments, Queue, undefined)),
-                            none,
-                            ActingUser).
+    case rabbit_amqqueue:exists(Name) of
+        true ->
+            ok;
+        false ->
+            rabbit_amqqueue:declare(Name,
+                                    maps:get(durable, Queue, undefined),
+                                    maps:get(auto_delete, Queue, undefined),
+                                    args(maps:get(arguments, Queue, undefined)),
+                                    none,
+                                    ActingUser)
+    end.
 
 add_exchange(Exchange, ActingUser) ->
     add_exchange_int(Exchange, r(exchange, Exchange), ActingUser).
@@ -574,17 +622,22 @@ add_exchange_int(_Exchange, R = #resource{kind = exchange,
     rabbit_log:warning("Skipping import of an exchange whose name begins with 'amq.', "
                        "name: ~s, acting user: ~s", [Name, ActingUser]);
 add_exchange_int(Exchange, Name, ActingUser) ->
-    Internal = case maps:get(internal, Exchange, undefined) of
-                   undefined -> false; %% =< 2.2.0
-                   I         -> I
-               end,
-    rabbit_exchange:declare(Name,
-                            rabbit_exchange:check_type(maps:get(type, Exchange, undefined)),
-                            maps:get(durable,                         Exchange, undefined),
-                            maps:get(auto_delete,                     Exchange, undefined),
-                            Internal,
-                            args(maps:get(arguments, Exchange, undefined)),
-                            ActingUser).
+    case rabbit_exchange:exists(Name) of
+        true ->
+            ok;
+        false ->
+            Internal = case maps:get(internal, Exchange, undefined) of
+                           undefined -> false; %% =< 2.2.0
+                           I         -> I
+                       end,
+            rabbit_exchange:declare(Name,
+                                    rabbit_exchange:check_type(maps:get(type, Exchange, undefined)),
+                                    maps:get(durable,                         Exchange, undefined),
+                                    maps:get(auto_delete,                     Exchange, undefined),
+                                    Internal,
+                                    args(maps:get(arguments, Exchange, undefined)),
+                                    ActingUser)
+    end.
 
 add_binding(Binding, ActingUser) ->
     DestType = dest_type(Binding),
@@ -642,10 +695,7 @@ filter_out_existing_queues(Queues) ->
 filter_out_existing_queues(VHost, Queues) ->
     Pred = fun(Queue) ->
                Rec = rv(VHost, queue, <<"name">>, Queue),
-               case rabbit_amqqueue:lookup(Rec) of
-                   {ok, _} -> false;
-                   {error, not_found} -> true
-               end
+               not rabbit_amqqueue:exists(Rec)
            end,
     lists:filter(Pred, Queues).
 
@@ -658,11 +708,11 @@ build_filtered_map([], AccMap) ->
     {ok, AccMap};
 build_filtered_map([Queue|Rest], AccMap0) ->
     {Rec, VHost} = build_queue_data(Queue),
-    case rabbit_amqqueue:lookup(Rec) of
-        {error, not_found} ->
+    case rabbit_amqqueue:exists(Rec) of
+        false ->
             AccMap1 = maps:update_with(VHost, fun(V) -> V + 1 end, 1, AccMap0),
             build_filtered_map(Rest, AccMap1);
-        {ok, _} ->
+        true ->
             build_filtered_map(Rest, AccMap0)
     end.
 

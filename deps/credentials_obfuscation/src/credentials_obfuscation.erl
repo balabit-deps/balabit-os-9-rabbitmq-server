@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2019-2020 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2019-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(credentials_obfuscation).
@@ -11,7 +11,7 @@
 -export([enabled/0, cipher/0, hash/0, iterations/0, secret/0]).
 
 %% API
--export([set_secret/1, encrypt/1, decrypt/1, refresh_config/0]).
+-export([set_secret/1, set_fallback_secret/1, encrypt/1, decrypt/1, refresh_config/0]).
 
 -spec enabled() -> boolean().
 enabled() ->
@@ -37,18 +37,25 @@ secret() ->
 set_secret(Secret) when is_binary(Secret) ->
     ok = credentials_obfuscation_svc:set_secret(Secret).
 
--spec encrypt(term()) -> {plaintext, term()} | {encrypted, binary()}.
+
+-spec set_fallback_secret(binary()) -> ok.
+set_fallback_secret(Secret) when is_binary(Secret) ->
+    ok = credentials_obfuscation_svc:set_fallback_secret(Secret).
+
+-spec encrypt(none | undefined) -> none | undefined;
+             (iodata()) -> {plaintext, binary()} | {encrypted, binary()}.
 encrypt(none) -> none;
 encrypt(undefined) -> undefined;
 encrypt(Term) ->
     credentials_obfuscation_svc:encrypt(Term).
 
--spec decrypt({plaintext, term()} | {encrypted, binary()}) -> term().
+-spec decrypt(none | undefined) -> none | undefined;
+             ({plaintext, binary()} | {encrypted, binary()}) -> binary().
 decrypt(none) -> none;
 decrypt(undefined) -> undefined;
 decrypt(Term) ->
     credentials_obfuscation_svc:decrypt(Term).
 
--spec refresh_config() -> ok.
+-spec refresh_config() -> ok | {error, invalid_config}.
 refresh_config() ->
     credentials_obfuscation_svc:refresh_config().

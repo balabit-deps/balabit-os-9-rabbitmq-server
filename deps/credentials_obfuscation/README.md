@@ -10,6 +10,10 @@ the Erlang runtime (`error_logger`).
 Note that this application **cannot protect against heap dumping attacks** and only helps
 avoid sensitive data appearing in log files.
 
+## Supported Erlang/OTP Versions
+
+This library uses the modern `crypto` API and **requires Erlang 22.3 or a later version**.
+
 ## Usage
 
 First, make the `credentials_obfuscation` application a dependency of your project.
@@ -40,10 +44,14 @@ credentials_obfuscation:decrypt(Encrypted).
 ```
 
 Lists (char lists in Elixir) will be converted to binaries before encryption.
-This means that decrypted values will also be returned as binaries.
+This means that decrypted values will alwyas be returned as binaries.
+
+Lists here mean "byte lists", that is Unicode characters are not
+supported. This should still be sufficient for encryption of
+URIs, generated credentials, and many kinds of sensitive identifiers.
 
 ## License and Copyright
 
 See [LICENSE](./LICENSE).
 
-(c) 2019-2020 VMware, Inc or its affiliates.
+(c) 2019-2022 VMware, Inc or its affiliates.

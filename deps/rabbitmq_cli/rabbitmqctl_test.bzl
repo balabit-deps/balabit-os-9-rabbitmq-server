@@ -1,151 +1,211 @@
-load("@bazel-erlang//:erlang_home.bzl", "ErlangHomeProvider", "ErlangVersionProvider")
-load("@bazel-erlang//:bazel_erlang_lib.bzl", "BEGINS_WITH_FUN", "ErlangLibInfo", "QUERY_ERL_VERSION", "path_join")
-load("@bazel-erlang//:ct.bzl", "code_paths")
-load("//:elixir_home.bzl", "ElixirHomeProvider")
-load(":rabbitmqctl.bzl", "MIX_DEPS_DIR")
-
-def _lib_dirs(dep):
-    return [path_join(p, "..") for p in code_paths(dep)]
+load(
+    "@rules_erlang//:erlang_app_info.bzl",
+    "ErlangAppInfo",
+)
+load(
+    "@rules_erlang//:util.bzl",
+    "path_join",
+    "windows_path",
+)
+load(
+    "//bazel/elixir:elixir_toolchain.bzl",
+    "elixir_dirs",
+    "erlang_dirs",
+    "maybe_install_erlang",
+)
+load(
+    ":rabbitmqctl.bzl",
+    "deps_dir_contents",
+)
 
 def _impl(ctx):
-    erlang_version = ctx.attr._erlang_version[ErlangVersionProvider].version
-    erlang_home = ctx.attr._erlang_home[ErlangHomeProvider].path
-    elixir_home = ctx.attr._elixir_home[ElixirHomeProvider].path
+    (erlang_home, _, erlang_runfiles) = erlang_dirs(ctx)
+    (elixir_home, elixir_runfiles) = elixir_dirs(ctx, short_path = True)
 
-    copy_compiled_deps_commands = []
-    copy_compiled_deps_commands.append("mkdir ${{TEST_UNDECLARED_OUTPUTS_DIR}}/{}".format(MIX_DEPS_DIR))
-    for dep in ctx.attr.deps:
-        lib_info = dep[ErlangLibInfo]
-        if lib_info.erlang_version != erlang_version:
-            fail("Mismatched erlang versions", erlang_version, lib_info.erlang_version)
+    deps_dir = ctx.label.name + "_deps"
 
-        dest_dir = path_join("${TEST_UNDECLARED_OUTPUTS_DIR}", MIX_DEPS_DIR, lib_info.lib_name)
-        copy_compiled_deps_commands.append(
-            "mkdir {}".format(dest_dir),
-        )
-        copy_compiled_deps_commands.append(
-            "mkdir {}".format(path_join(dest_dir, "include")),
-        )
-        copy_compiled_deps_commands.append(
-            "mkdir {}".format(path_join(dest_dir, "ebin")),
-        )
-        for hdr in lib_info.include:
-            copy_compiled_deps_commands.append(
-                "cp ${{PWD}}/{source} {target}".format(
-                    source = hdr.short_path,
-                    target = path_join(dest_dir, "include", hdr.basename),
-                ),
-            )
-        for beam in lib_info.beam:
-            copy_compiled_deps_commands.append(
-                "cp ${{PWD}}/{source} {target}".format(
-                    source = beam.short_path,
-                    target = path_join(dest_dir, "ebin", beam.basename),
-                ),
-            )
-
-    erl_libs = ":".join(
-        [path_join("${TEST_SRCDIR}/${TEST_WORKSPACE}", d) for dep in ctx.attr.deps for d in _lib_dirs(dep)],
+    deps_dir_files = deps_dir_contents(
+        ctx,
+        ctx.attr.deps,
+        deps_dir,
     )
 
-    script = """
-        set -euo pipefail
-
-        export LANG="en_US.UTF-8"
-        export LC_ALL="en_US.UTF-8"
-
-        export PATH={elixir_home}/bin:{erlang_home}/bin:${{PATH}}
-
-        INITIAL_DIR=${{PWD}}
-
-        ln -s ${{PWD}}/{package_dir}/config ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-        # ln -s ${{PWD}}/{package_dir}/include ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-        ln -s ${{PWD}}/{package_dir}/lib ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-        ln -s ${{PWD}}/{package_dir}/test ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-        ln -s ${{PWD}}/{package_dir}/mix.exs ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-
-        {copy_compiled_deps_command}
-
-        cd ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-
-        export HOME=${{PWD}}
-
-        {begins_with_fun}
-        V=$({query_erlang_version})
-        if ! beginswith "{erlang_version}" "$V"; then
-            echo "Erlang version mismatch (Expected {erlang_version}, found $V)"
-            exit 1
-        fi
-
-        export DEPS_DIR={mix_deps_dir}
-        export ERL_COMPILER_OPTIONS=deterministic
-        mix local.hex --force
-        mix local.rebar --force
-        mix make_deps
-
-        # due to https://github.com/elixir-lang/elixir/issues/7699 we
-        # "run" the tests, but skip them all, in order to trigger
-        # compilation of all *_test.exs files before we actually run them
-        mix test --exclude test
-
-        export TEST_TMPDIR=${{TEST_UNDECLARED_OUTPUTS_DIR}}
-
-        # we need a running broker with certain plugins for this to pass 
-        trap 'catch $?' EXIT
-        catch() {{
-            pid=$(cat ${{TEST_TMPDIR}}/*/*.pid)
-            kill -TERM "${{pid}}"
-        }}
-        cd ${{INITIAL_DIR}}
-        ./{rabbitmq_run_cmd} start-background-broker
-        cd ${{TEST_UNDECLARED_OUTPUTS_DIR}}
-
-        # The test cases will need to be able to load code from the deps
-        # directly, so we set ERL_LIBS
-        export ERL_LIBS={erl_libs}
-
-        # run the actual tests
-        mix test --trace --max-failures 1
-    """.format(
-        begins_with_fun = BEGINS_WITH_FUN,
-        query_erlang_version = QUERY_ERL_VERSION,
-        erlang_version = erlang_version,
-        erlang_home = erlang_home,
-        elixir_home = elixir_home,
-        package_dir = ctx.label.package,
-        copy_compiled_deps_command = " && ".join(copy_compiled_deps_commands),
-        mix_deps_dir = MIX_DEPS_DIR,
-        erl_libs = erl_libs,
-        rabbitmq_run_cmd = ctx.attr.rabbitmq_run[DefaultInfo].files_to_run.executable.short_path,
+    package_dir = path_join(
+        ctx.label.workspace_root,
+        ctx.label.package,
     )
+
+    if not ctx.attr.is_windows:
+        output = ctx.actions.declare_file(ctx.label.name)
+        script = """set -euo pipefail
+
+{maybe_install_erlang}
+
+if [[ "{elixir_home}" == /* ]]; then
+    ABS_ELIXIR_HOME="{elixir_home}"
+else
+    ABS_ELIXIR_HOME=$PWD/{elixir_home}
+fi
+
+export PATH="$ABS_ELIXIR_HOME"/bin:"{erlang_home}"/bin:${{PATH}}
+
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+
+INITIAL_DIR="$(pwd)"
+
+if [ ! -f ${{INITIAL_DIR}}/{package_dir}/test/test_helper.exs ]; then
+    echo "test_helper.exs cannot be found. 'bazel clean' might fix this."
+    exit 1
+fi
+
+cp -r ${{INITIAL_DIR}}/{package_dir}/config ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+cp -r ${{INITIAL_DIR}}/{package_dir}/lib ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+cp -r ${{INITIAL_DIR}}/{package_dir}/test ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+cp    ${{INITIAL_DIR}}/{package_dir}/mix.exs ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+cp    ${{INITIAL_DIR}}/{package_dir}/.formatter.exs ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+
+cd ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+
+export IS_BAZEL=true
+export HOME=${{PWD}}
+export DEPS_DIR=$TEST_SRCDIR/$TEST_WORKSPACE/{package_dir}/{deps_dir}
+export MIX_ENV=test
+export ERL_COMPILER_OPTIONS=deterministic
+"${{ABS_ELIXIR_HOME}}"/bin/mix local.hex --force
+"${{ABS_ELIXIR_HOME}}"/bin/mix local.rebar --force
+"${{ABS_ELIXIR_HOME}}"/bin/mix deps.get
+# "${{ABS_ELIXIR_HOME}}"/bin/mix dialyzer
+if [ ! -d _build/${{MIX_ENV}}/lib/rabbit_common ]; then
+    cp -r ${{DEPS_DIR}}/* _build/${{MIX_ENV}}/lib
+fi
+"${{ABS_ELIXIR_HOME}}"/bin/mix deps.compile
+"${{ABS_ELIXIR_HOME}}"/bin/mix compile
+
+# due to https://github.com/elixir-lang/elixir/issues/7699 we
+# "run" the tests, but skip them all, in order to trigger
+# compilation of all *_test.exs files before we actually run them
+"${{ABS_ELIXIR_HOME}}"/bin/mix test --exclude test
+
+export TEST_TMPDIR=${{TEST_UNDECLARED_OUTPUTS_DIR}}
+
+# we need a running broker with certain plugins for this to pass 
+trap 'catch $?' EXIT
+catch() {{
+    pid=$(cat ${{TEST_TMPDIR}}/*/*.pid)
+    kill -TERM "${{pid}}"
+}}
+cd ${{INITIAL_DIR}}
+./{rabbitmq_run_cmd} start-background-broker
+cd ${{TEST_UNDECLARED_OUTPUTS_DIR}}
+
+# The test cases will need to be able to load code from the deps
+# directly, so we set ERL_LIBS
+export ERL_LIBS=$DEPS_DIR
+
+# run the actual tests
+set +u
+set -x
+"${{ABS_ELIXIR_HOME}}"/bin/mix test --trace --max-failures 1 ${{TEST_FILE}}
+""".format(
+            maybe_install_erlang = maybe_install_erlang(ctx, short_path = True),
+            erlang_home = erlang_home,
+            elixir_home = elixir_home,
+            package_dir = package_dir,
+            deps_dir = deps_dir,
+            rabbitmq_run_cmd = ctx.attr.rabbitmq_run[DefaultInfo].files_to_run.executable.short_path,
+        )
+    else:
+        output = ctx.actions.declare_file(ctx.label.name + ".bat")
+        script = """@echo off
+echo Erlang Version: {erlang_version}
+
+:: set LANG="en_US.UTF-8"
+:: set LC_ALL="en_US.UTF-8"
+
+set PATH="{elixir_home}\\bin";"{erlang_home}\\bin";%PATH%
+
+set OUTPUTS_DIR=%TEST_UNDECLARED_OUTPUTS_DIR:/=\\%
+
+:: robocopy exits non-zero when files are copied successfully
+:: https://social.msdn.microsoft.com/Forums/en-US/d599833c-dcea-46f5-85e9-b1f028a0fefe/robocopy-exits-with-error-code-1?forum=tfsbuild
+robocopy {package_dir}\\config %OUTPUTS_DIR%\\config /E /NFL /NDL /NJH /NJS /nc /ns /np
+robocopy {package_dir}\\lib %OUTPUTS_DIR%\\lib /E /NFL /NDL /NJH /NJS /nc /ns /np
+robocopy {package_dir}\\test %OUTPUTS_DIR%\\test /E /NFL /NDL /NJH /NJS /nc /ns /np
+copy {package_dir}\\mix.exs %OUTPUTS_DIR%\\mix.exs || goto :error
+copy {package_dir}\\.formatter.exs %OUTPUTS_DIR%\\.formatter.exs || goto :error
+
+cd %OUTPUTS_DIR% || goto :error
+
+set DEPS_DIR=%TEST_SRCDIR%/%TEST_WORKSPACE%/{package_dir}/{deps_dir}
+set DEPS_DIR=%DEPS_DIR:/=\\%
+set ERL_COMPILER_OPTIONS=deterministic
+set MIX_ENV=test mix dialyzer
+echo y | "{elixir_home}\\bin\\mix" local.hex --force || goto :error
+echo y | "{elixir_home}\\bin\\mix" local.rebar --force || goto :error
+"{elixir_home}\\bin\\mix" deps.get || goto :error
+"{elixir_home}\\bin\\mix" deps.compile || goto :error
+"{elixir_home}\\bin\\mix" compile || goto :error
+
+REM need to start the background broker here
+set TEST_TEMPDIR=%OUTPUTS_DIR%
+
+set ERL_LIBS=%DEPS_DIR%
+
+"{elixir_home}\\bin\\mix" test --trace --max-failures 1 || goto :error
+goto :EOF
+:error
+exit /b 1
+""".format(
+            erlang_home = windows_path(erlang_home),
+            elixir_home = windows_path(elixir_home),
+            package_dir = windows_path(ctx.label.package),
+            deps_dir = deps_dir,
+            rabbitmq_run_cmd = ctx.attr.rabbitmq_run[DefaultInfo].files_to_run.executable.short_path,
+        )
 
     ctx.actions.write(
-        output = ctx.outputs.executable,
+        output = output,
         content = script,
     )
 
-    runfiles = ctx.runfiles(ctx.files.srcs)
-    runfiles = runfiles.merge(ctx.runfiles(ctx.files.data))
-    for dep in ctx.attr.deps:
-        lib_info = dep[ErlangLibInfo]
-        runfiles = runfiles.merge(ctx.runfiles(lib_info.include + lib_info.beam))
-    runfiles = runfiles.merge(ctx.attr.rabbitmq_run[DefaultInfo].default_runfiles)
+    runfiles = ctx.runfiles(
+        files = ctx.files.srcs + ctx.files.data,
+        transitive_files = depset(deps_dir_files),
+    ).merge_all([
+        erlang_runfiles,
+        elixir_runfiles,
+        ctx.attr.rabbitmq_run[DefaultInfo].default_runfiles,
+    ])
 
-    return [DefaultInfo(runfiles = runfiles)]
+    return [DefaultInfo(
+        runfiles = runfiles,
+        executable = output,
+    )]
 
-rabbitmqctl_test = rule(
+rabbitmqctl_private_test = rule(
     implementation = _impl,
     attrs = {
+        "is_windows": attr.bool(mandatory = True),
         "srcs": attr.label_list(allow_files = [".ex", ".exs"]),
         "data": attr.label_list(allow_files = True),
-        "deps": attr.label_list(providers = [ErlangLibInfo]),
+        "deps": attr.label_list(providers = [ErlangAppInfo]),
         "rabbitmq_run": attr.label(
             executable = True,
             cfg = "target",
         ),
-        "_erlang_version": attr.label(default = "@bazel-erlang//:erlang_version"),
-        "_erlang_home": attr.label(default = "@bazel-erlang//:erlang_home"),
-        "_elixir_home": attr.label(default = "//:elixir_home"),
     },
+    toolchains = [
+        "//bazel/elixir:toolchain_type",
+    ],
     test = True,
 )
+
+def rabbitmqctl_test(**kwargs):
+    rabbitmqctl_private_test(
+        is_windows = select({
+            "@bazel_tools//src/conditions:host_windows": True,
+            "//conditions:default": False,
+        }),
+        **kwargs
+    )

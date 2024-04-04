@@ -1,42 +1,99 @@
+load("@bazel_skylib//rules:select_file.bzl", "select_file")
 load(":rabbitmqctl.bzl", "rabbitmqctl")
+load(":rabbitmqctl_check_formatted.bzl", "rabbitmqctl_check_formatted_test")
 load(":rabbitmqctl_test.bzl", "rabbitmqctl_test")
-load(":elixir.bzl", "elixir")
-
-# This rule simply exposes elixir as a runtime lib for tests in erlang
-elixir(
-    name = "elixir_as_bazel_erlang_lib",
-    visibility = ["//visibility:public"],
-)
+load("//:rabbitmq_home.bzl", "rabbitmq_home")
+load("//:rabbitmq_run.bzl", "rabbitmq_run")
+load("//:rabbitmq.bzl", "STARTS_BACKGROUND_BROKER_TAG")
 
 # Note: All the various rabbitmq-* scripts are just copies of rabbitmqctl
 rabbitmqctl(
     name = "rabbitmqctl",
-    srcs = glob([
+    srcs = [
         "mix.exs",
         "config/config.exs",
+    ] + glob([
         "lib/**/*.ex",
     ]),
+    license_files = glob(["LICENSE*"]),
     visibility = ["//visibility:public"],
     deps = [
-        "//deps/rabbit_common:bazel_erlang_lib",
+        "//deps/rabbit_common:erlang_app",
     ],
 )
 
-rabbitmqctl_test(
-    name = "rabbitmqctl_tests",
-    size = "large",
-    srcs = glob([
+select_file(
+    name = "fetched_srcs",
+    srcs = ":rabbitmqctl",
+    subpath = "deps.tar",
+    visibility = ["//visibility:public"],
+)
+
+rabbitmq_home(
+    name = "broker-for-cli-tests-home",
+    testonly = True,
+    plugins = [
+        "//deps/rabbit:erlang_app",
+        "//deps/rabbitmq_federation:erlang_app",
+        "//deps/rabbitmq_stomp:erlang_app",
+        "//deps/rabbitmq_stream_management:erlang_app",
+        "//deps/amqp_client:erlang_app",
+    ],
+)
+
+rabbitmq_run(
+    name = "rabbitmq-for-cli-tests-run",
+    testonly = True,
+    home = ":broker-for-cli-tests-home",
+    visibility = ["//visibility:public"],
+)
+
+rabbitmqctl_check_formatted_test(
+    name = "check_formatted",
+    size = "small",
+    srcs = [
         "mix.exs",
         "config/config.exs",
+        ".formatter.exs",
+    ] + glob([
+        "lib/**/*.ex",
+        "test/**/*.exs",
+    ]),
+    data = glob(["test/fixtures/**/*"]),
+    target_compatible_with = select({
+        "@platforms//os:macos": ["@platforms//os:macos"],
+        "//conditions:default": ["@platforms//os:linux"],
+    }),
+)
+
+alias(
+    name = "rabbitmqctl_check_formatted",
+    actual = ":check_formatted",
+)
+
+rabbitmqctl_test(
+    name = "tests",
+    size = "large",
+    srcs = [
+        "mix.exs",
+        "config/config.exs",
+        ".formatter.exs",
+    ] + glob([
         "lib/**/*.ex",
         "test/**/*.exs",
     ]),
     data = glob(["test/fixtures/**/*"]),
     flaky = True,
-    rabbitmq_run = "//:rabbitmq-for-cli-tests-run",
+    rabbitmq_run = ":rabbitmq-for-cli-tests-run",
+    tags = [STARTS_BACKGROUND_BROKER_TAG],
     deps = [
-        "//deps/amqp_client:bazel_erlang_lib",
-        "//deps/rabbit:bazel_erlang_lib",
-        "//deps/rabbit_common:bazel_erlang_lib",
+        "//deps/amqp_client:erlang_app",
+        "//deps/rabbit:erlang_app",
+        "//deps/rabbit_common:erlang_app",
     ],
+)
+
+alias(
+    name = "rabbitmqctl_tests",
+    actual = ":tests",
 )

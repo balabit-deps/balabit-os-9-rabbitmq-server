@@ -1,3 +1,4 @@
 version=4
-https://github.com/rabbitmq/@PACKAGE@/releases \
-      (?:.*?/)?@PACKAGE@_(\d[\d.]*)\.orig\.tar\.xz debian uupdate
+opts="searchmode=plain,pgpmode=auto" \
+  https://api.github.com/repos/rabbitmq/rabbitmq-server/releases?per_page=100 \
+  https://github.com/rabbitmq/rabbitmq-server/releases/download/[^/]+/@PACKAGE@-@ANY_VERSION@@ARCHIVE_EXT@

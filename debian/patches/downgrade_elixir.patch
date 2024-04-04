@@ -1,0 +1,11 @@
+--- a/deps/rabbitmq_cli/mix.exs
++++ b/deps/rabbitmq_cli/mix.exs
+@@ -10,7 +10,7 @@
+   def project do
+     [
+       app: :rabbitmqctl,
+-      elixir: ">= 1.13.4 and < 1.15.0",
++      elixir: ">= 1.12.2 and < 1.15.0",
+       build_embedded: Mix.env() == :prod,
+       start_permanent: Mix.env() == :prod,
+       escript: [main_module: RabbitMQCtl, emu_args: "-hidden", path: "escript/rabbitmqctl"],

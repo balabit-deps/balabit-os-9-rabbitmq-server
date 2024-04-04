@@ -151,7 +151,7 @@ enqueue(Correlation, Msg,
         0 ->
             %% the leader is running the old version
             enqueue(Correlation, Msg, State0#state{queue_status = go});
-        1 ->
+        N when is_integer(N) ->
             %% were running the new version on the leader do sync initialisation
             %% of enqueuer session
             Reg = rabbit_fifo:make_register_enqueuer(self()),
@@ -289,7 +289,10 @@ settle(ConsumerTag, [_|_] = MsgIds,
     %% sent once we have seen enough notifications
     Unsent = maps:update_with(ConsumerId,
                               fun ({Settles, Returns, Discards}) ->
-                                      {Settles ++ MsgIds, Returns, Discards}
+                                      %% MsgIds has fewer elements than Settles.
+                                      %% Therefore put it on the left side of the ++ operator.
+                                      %% The order in which messages are settled does not matter.
+                                      {MsgIds ++ Settles, Returns, Discards}
                               end, {MsgIds, [], []}, Unsent0),
     {State0#state{unsent_commands = Unsent}, []}.
 

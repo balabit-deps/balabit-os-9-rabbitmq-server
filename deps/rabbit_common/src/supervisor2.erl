@@ -81,17 +81,36 @@
 
 -include_lib("kernel/include/logger.hrl").
 
+-ifdef(TRACE_SUPERVISOR2).
+-define(TRACE_SUPERVISOR2_ERROR_LOG(ERROR, CHILD, SUP_NAME, LOGGED),
+        rabbit_event:notify(supervisor2_error_report,
+           [{supervisor, SUP_NAME},
+            {errorContext, ERROR},
+            {offender,extract_child(CHILD)},
+            {logged, LOGGED},
+            {timestamp, os:system_time(milli_seconds)}])).
+-else.
+-define(TRACE_SUPERVISOR2_ERROR_LOG(ERROR, CHILD, SUP_NAME, LOGGED), ok).
+-endif.
+
 -define(report_error(Error, Reason, Child, SupName),
-        ?LOG_ERROR(#{label=>{supervisor,Error},
-                     report=>[{supervisor,SupName},
-                              {errorContext,Error},
-                              {reason,Reason},
-                              {offender,extract_child(Child)}]},
-                   #{domain=>[otp,sasl],
-                     report_cb=>fun logger:format_otp_report/1,
-                     logger_formatter=>#{title=>"SUPERVISOR REPORT"},
-                     error_logger=>#{tag=>error_report,
-                                     type=>supervisor_report}})).
+        case lists:member(Error, rabbit_misc:get_env(rabbit, ignore_supervisor2_error_reports, [])) of
+            false ->
+                ?TRACE_SUPERVISOR2_ERROR_LOG(Error, Child, SupName, true),
+                ?LOG_ERROR(#{label=>{supervisor,Error},
+                             report=>[{supervisor,SupName},
+                                      {errorContext,Error},
+                                      {reason,Reason},
+                                      {offender,extract_child(Child)}]},
+                           #{domain=>[otp,sasl],
+                             report_cb=>fun logger:format_otp_report/1,
+                             logger_formatter=>#{title=>"SUPERVISOR REPORT"},
+                             error_logger=>#{tag=>error_report,
+                                             type=>supervisor_report}});
+            true ->
+                ?TRACE_SUPERVISOR2_ERROR_LOG(Error, Child, SupName, false),
+                ok
+        end).
 
 %%--------------------------------------------------------------------------
 
@@ -1542,7 +1561,7 @@ child_to_spec(#child{id = Id,
 %%% Add a new restart and calculate if the max restart
 %%% intensity has been reached (in that case the supervisor
 %%% shall terminate).
-%%% All restarts accured inside the period amount of seconds
+%%% All restarts occured inside the period amount of seconds
 %%% are kept in the #state.restarts list.
 %%% Returns: {ok, State'} | {terminate, State'}
 %%% ------------------------------------------------------

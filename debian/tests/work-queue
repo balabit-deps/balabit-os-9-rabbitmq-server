@@ -1,0 +1,117 @@
+#!/bin/sh
+
+# Reset rabbitmq
+rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl start_app
+
+cat << EOF > new_task.py
+#!/usr/bin/env python3
+import pika
+import sys
+
+connection = pika.BlockingConnection(
+    pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+
+channel.queue_declare(queue='task_queue', durable=True)
+
+message = ' '.join(sys.argv[1:]) or "Hello World!"
+channel.basic_publish(
+    exchange='',
+    routing_key='task_queue',
+    body=message,
+    properties=pika.BasicProperties(delivery_mode=2)  # Set delivery mode to persistent (2)
+    )
+print(f" [x] Sent {message}")
+connection.close()
+EOF
+
+cat << EOF > worker.py
+#!/usr/bin/env python3
+import pika
+import time
+
+connection = pika.BlockingConnection(
+    pika.ConnectionParameters(host='localhost'))
+channel = connection.channel()
+
+channel.queue_declare(queue='task_queue', durable=True)
+print(' [*] Waiting for messages. To exit press CTRL+C')
+
+
+def callback(ch, method, properties, body):
+    print(f" [x] Received {body.decode()}")
+    time.sleep(body.count(b'.'))
+    print(" [x] Done")
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+
+channel.basic_qos(prefetch_count=1)
+channel.basic_consume(queue='task_queue', on_message_callback=callback)
+
+channel.start_consuming()
+EOF
+
+
+# Create 5 queues messages
+python3 new_task.py First message.
+python3 new_task.py Second message..
+python3 new_task.py Third message...
+python3 new_task.py Fourth message....
+python3 new_task.py Fifth message.....
+
+# check the queued messages, we shoudl have 5 such as:
+# # rabbitmqctl list_queues name messages_ready messages_unacknowledged
+# Timeout: 60.0 seconds ...
+# Listing queues for vhost / ...
+# name	messages_ready	messages_unacknowledged
+# hello	0	0
+# task_queue	5	0
+#
+# Check that the task queue exists and that there is 5 messages
+echo "Expected:"
+echo "task_queue 5 0"
+echo "Actual:"
+tqueue=$(rabbitmqctl list_queues name messages_ready messages_unacknowledged | grep task_queue)
+echo $tqueue
+if echo $tqueue | awk '{print $2}' | grep -q "^5$"; then
+    echo "The 'task_queue' queue exists with 5 message."
+else
+    echo "Error: error checking the task_queue"
+    exit 1
+fi
+
+# Now create 2 workers
+python3 worker.py &
+python3 worker.py &
+
+# let the workers do their job
+sleep 13
+
+# Now there should be no messages_ready and no messages_unacknowledged such as:
+# # rabbitmqctl list_queues name messages_ready messages_unacknowledged
+# Timeout: 60.0 seconds ...
+# Listing queues for vhost / ...
+# name	messages_ready	messages_unacknowledged
+# hello	0	0
+# task_queue	0	0
+echo "Expected:"
+echo "task_queue 0 0"
+echo "Actual:"
+tqueue=$(rabbitmqctl list_queues name messages_ready messages_unacknowledged | grep task_queue)
+echo $tqueue
+if echo $tqueue | grep task_queue | awk '{print $2}' | grep -q "^0"; then
+    echo "The 'task_queue' queue exists with 0 messages_ready."
+else
+    echo "Error: checking the task_queue messages_ready"
+    exit 1
+fi
+
+if echo $tqueue | awk '{print $3}' | grep -q "^0"; then
+    echo "The 'task_queue' queue exists with 0 messages_unacknowledged."
+else
+    echo "Error: checking the task_queue messages_unacknowledged"
+    exit 1
+fi
+

@@ -1,0 +1,99 @@
+#!/bin/sh
+
+# Reset rabbitmq
+rabbitmqctl stop_app
+rabbitmqctl reset
+rabbitmqctl start_app
+
+cat <<EOF >send.py
+#!/usr/bin/env python3
+import pika
+
+connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+channel = connection.channel()
+
+channel.queue_declare(queue='hello')
+
+channel.basic_publish(exchange='',
+                      routing_key='hello',
+                      body='Hello World!')
+print(" [x] Sent 'Hello World!'")
+EOF
+
+cat <<EOF >receive.py
+#!/usr/bin/env python3
+import pika, sys, os
+
+def main():
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    channel = connection.channel()
+
+    channel.queue_declare(queue='hello')
+
+    def callback(ch, method, properties, body):
+        print(f" [x] Received {body}")
+
+    channel.basic_consume(queue='hello', on_message_callback=callback, auto_ack=True)
+
+    print(' [*] Waiting for messages. To exit press CTRL+C')
+    channel.start_consuming()
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('Interrupted')
+        try:
+            sys.exit(0)
+        except SystemExit:
+            os._exit(0)
+EOF
+
+echo "sending the message now"
+python3 send.py
+
+# `rabbitmqctl list_queues` should look like
+# Timeout: 60.0 seconds ...
+# Listing queues for vhost / ...
+# name	messages
+# hello	1
+#
+# Check that the hello queue exists and that there is 1 message
+rabbitmqctl list_queues # print for debugging
+if rabbitmqctl list_queues | grep hello | awk '{print $2}' | grep -q "^1$"; then
+    echo "The 'hello' queue exists with a single message."
+else
+    if [ $? -eq 1 ]; then
+        echo "Error: 'hello' queue not found."
+        exit 1
+    else
+        echo "Error: An unknown error occurred."
+        exit 1
+    fi
+fi
+
+# should see
+# [*] Waiting for messages. To exit press CTRL+C
+# [x] Received b'Hello World!'
+timeout 3s python3 receive.py
+
+# now the hello queue should still exist, but have no messages like so:
+# # rabbitmqctl list_queues
+# Timeout: 60.0 seconds ...
+# Listing queues for vhost / ...
+# name	messages
+# hello	0
+#
+# Check that the hello queue exists and that there is no message
+rabbitmqctl list_queues # print for debugging
+if rabbitmqctl list_queues | grep hello | awk '{print $2}' | grep -q "^0$"; then
+    echo "The 'hello' queue exists with no messages."
+else
+    if [ $? -eq 1 ]; then
+        echo "Error: 'hello' queue not found."
+        exit 1
+    else
+        echo "Error: An unknown error occurred."
+        exit 1
+    fi
+fi

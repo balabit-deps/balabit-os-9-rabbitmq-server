@@ -1,15 +1,15 @@
-load("@bazel-erlang//:bazel_erlang_lib.bzl", "erlc")
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load(
     "//:rabbitmq.bzl",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
-    "RABBITMQ_TEST_ERLC_OPTS",
     "assert_suites",
     "broker_for_integration_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
     "rabbitmq_suite",
+    "rabbitmq_test_helper",
 )
 
 APP_NAME = "rabbitmq_stomp"
@@ -45,18 +45,19 @@ BUILD_DEPS = [
 ]
 
 DEPS = [
-    "//deps/amqp_client:bazel_erlang_lib",
-    "//deps/rabbit_common:bazel_erlang_lib",
-    "@ranch//:bazel_erlang_lib",
+    "//deps/amqp_client:erlang_app",
+    "//deps/rabbit_common:erlang_app",
+    "@ranch//:erlang_app",
 ]
 
 RUNTIME_DEPS = [
-    "//deps/rabbit:bazel_erlang_lib",
+    "//deps/rabbit:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
     app_env = APP_ENV,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_module = APP_MODULE,
     app_name = APP_NAME,
     build_deps = BUILD_DEPS,
@@ -64,21 +65,27 @@ rabbitmq_lib(
     deps = DEPS,
 )
 
-xref(tags = ["xref"])
+xref(
+    additional_libs = BUILD_DEPS,
+)
+
+plt(
+    name = "base_plt",
+    deps = DEPS,
+)
 
 dialyze(
-    dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
-    plt = "//:base_plt",
-    tags = ["dialyze"],
+    dialyzer_opts = RABBITMQ_DIALYZER_OPTS + ["-Wno_undefined_callbacks"],
+    plt = ":base_plt",
+    warnings_as_errors = False,
 )
 
 broker_for_integration_suites()
 
 PACKAGE = "deps/rabbitmq_stomp"
 
-erlc(
+rabbitmq_test_helper(
     name = "rabbit_stomp_client",
-    testonly = True,
     srcs = [
         "test/src/rabbit_stomp_client.erl",
     ],
@@ -86,10 +93,8 @@ erlc(
         "include/**/*.hrl",
         "src/**/*.hrl",
     ]),
-    erlc_opts = RABBITMQ_TEST_ERLC_OPTS,
-    dest = "test",
     deps = [
-        ":test_bazel_erlang_lib",
+        ":test_erlang_app",
     ],
 )
 
@@ -119,8 +124,8 @@ suites = [
         name = "frame_SUITE",
         size = "small",
         deps = [
-            "//deps/amqp_client:bazel_erlang_lib",
-            "//deps/rabbit_common:bazel_erlang_lib",
+            "//deps/amqp_client:erlang_app",
+            "//deps/rabbit_common:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -155,8 +160,8 @@ suites = [
         name = "util_SUITE",
         size = "small",
         deps = [
-            "//deps/amqp_client:bazel_erlang_lib",
-            "//deps/rabbit_common:bazel_erlang_lib",
+            "//deps/amqp_client:erlang_app",
+            "//deps/rabbit_common:erlang_app",
         ],
     ),
 ]

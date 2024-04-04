@@ -8,10 +8,6 @@
 
 -behaviour('Elixir.RabbitMQ.CLI.CommandBehaviour').
 
--ignore_xref([
-    {'Elixir.RabbitMQ.CLI.DefaultOutput', output, 1}
-]).
-
 -export([
          usage/0,
          validate/2,
@@ -26,7 +22,7 @@
 
 
 usage() ->
-    <<"add_uaa_key <name> [--json=<json_key>] [--pem=<public_key>] [--pem_file=<pem_file>]">>.
+    <<"add_uaa_key <name> [--json=<json_key>] [--pem=<public_key>] [--pem-file=<pem_file>]">>.
 
 switches() ->
     [{json, string},

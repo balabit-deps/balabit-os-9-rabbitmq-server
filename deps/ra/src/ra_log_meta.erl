@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_log_meta).
@@ -67,9 +67,8 @@ handle_batch(Commands, #?MODULE{ref = Ref,
                     #{Id := Data} ->
                         Inserts0#{Id => update_key(Key, Value, Data)};
                     _ ->
-                        case dets:lookup(Ref, Id) of
-                            [{Id, T, V, A}] ->
-                                Data = {Id, T, V, A},
+                        case ets:lookup(TblName, Id) of
+                            [{Id, _, _, _} = Data] ->
                                 Inserts0#{Id => update_key(Key, Value, Data)};
                             [] ->
                                 Data = {Id, undefined, undefined, undefined},
@@ -107,6 +106,7 @@ handle_batch(Commands, #?MODULE{ref = Ref,
 
 terminate(_, #?MODULE{ref = Ref,
                       table_name = TblName}) ->
+    ?DEBUG("ra: meta data store is terminating", []),
     ok = dets:sync(TblName),
     _ = dets:close(Ref),
     ok.

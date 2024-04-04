@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_server).
 
@@ -10,6 +10,9 @@
 -include("ra_server.hrl").
 
 -compile(inline_list_funcs).
+
+-elvis([{elvis_style, dont_repeat_yourself, disable}]).
+-elvis([{elvis_style, god_modules, disable}]).
 
 -export([
          name/2,
@@ -37,6 +40,7 @@
          leader_id/1,
          current_term/1,
          machine_version/1,
+         machine/1,
          machine_query/2,
          % TODO: hide behind a handle_leader
          make_rpcs/1,
@@ -48,7 +52,7 @@
          handle_node_status/6,
          terminate/2,
          log_fold/3,
-         read_at/2,
+         log_read/2,
          recover/1
         ]).
 
@@ -94,6 +98,8 @@
                           ts := integer()}.
 
 -type command_correlation() :: integer() | reference().
+
+-type command_priority() :: normal | low.
 
 -type command_reply_mode() :: after_log_append |
                               await_consensus |
@@ -142,7 +148,7 @@
       LeaderId :: ra_server_id(), Term :: ra_term()}} |
     {next_event, ra_msg()} |
     {next_event, cast, ra_msg()} |
-    {notify, pid(), reference()} |
+    {notify, #{pid() => [term()]}} |
     %% used for tracking valid leader messages
     {record_leader_msg, ra_server_id()} |
     start_election_timeout.
@@ -179,6 +185,7 @@
                               % for periodic actions such as sending stale rpcs
                               % and persisting last_applied index
                               tick_timeout => non_neg_integer(), % ms
+                              install_snap_rpc_timeout => non_neg_integer(), % ms
                               await_condition_timeout => non_neg_integer(),
                               max_pipeline_count => non_neg_integer(),
                               ra_event_formatter => {module(), atom(), [term()]},
@@ -189,6 +196,7 @@
                             metrics_key => term(),
                             broadcast_time => non_neg_integer(), % ms
                             tick_timeout => non_neg_integer(), % ms
+                            install_snap_rpc_timeout => non_neg_integer(), % ms
                             await_condition_timeout => non_neg_integer(),
                             max_pipeline_count => non_neg_integer(),
                             ra_event_formatter => {module(), atom(), [term()]}}.
@@ -206,6 +214,7 @@
               command_type/0,
               command_meta/0,
               command_correlation/0,
+              command_priority/0,
               command_reply_mode/0,
               ra_event_formatter_fun/0,
               effect/0,
@@ -346,7 +355,7 @@ recover(#{cfg := #cfg{log_id = LogId,
     ?DEBUG("~s: recovery of state machine version ~b:~b "
            "from index ~b to ~b took ~bms",
            [LogId,  EffMacVer, MacVer, LastApplied, CommitIndex, After - Before]),
-    %% disable segment read cache by setting random accesss pattern
+    %% disable segment read cache by setting random access pattern
     Log = ra_log:release_resources(1, random, Log0),
     State#{log => Log,
            %% reset commit latency as recovery may calculate a very old value
@@ -454,13 +463,13 @@ handle_leader({PeerId, #append_entries_reply{success = false,
                                 [LogId, LastIdx, LastTerm, MI]),
                           {Peer0#{match_index => LastIdx,
                                   next_index => LastIdx + 1}, L};
-                      {_EntryTerm, L} ->
+                      {EntryTerm, L} ->
                           NextIndex = max(min(NI-1, LastIdx), MI),
                           ?DEBUG("~s: leader received last_index ~b"
                                  " from ~w with term ~b "
                                  "- expected term ~b. Setting"
                                  "next_index to ~b",
-                                 [LogId, LastIdx, PeerId, LastTerm, _EntryTerm,
+                                 [LogId, LastIdx, PeerId, LastTerm, EntryTerm,
                                   NextIndex]),
                           % last_index has a different term or entry does not
                           % exist
@@ -523,7 +532,6 @@ handle_leader({ra_log_event, {written, _} = Evt}, State0 = #{log := Log0}) ->
     {Log, Effects0} = ra_log:handle_event(Evt, Log0),
     {State1, Effects1} = evaluate_quorum(State0#{log => Log}, Effects0),
     {State2, Effects2} = process_pending_consistent_queries(State1, Effects1),
-
     {State, _, Effects} = make_pipelined_rpc_effects(State2, Effects2),
     {leader, State, Effects};
 handle_leader({ra_log_event, Evt}, State = #{log := Log0}) ->
@@ -1044,7 +1052,7 @@ handle_follower(#append_entries_rpc{term = Term,
                                                    transition_to => follower}},
              Effects}
     end;
-handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
+handle_follower(#append_entries_rpc{term = Term, leader_id = LeaderId},
                 #{cfg := #cfg{id = Id, log_id = LogId} = Cfg,
                   current_term := CurTerm} = State) ->
     ok = incr_counter(Cfg, ?C_RA_SRV_AER_RECEIVED_FOLLOWER, 1),
@@ -1052,7 +1060,7 @@ handle_follower(#append_entries_rpc{term = _Term, leader_id = LeaderId},
     Reply = append_entries_reply(CurTerm, false, State),
     ?DEBUG("~s: follower got append_entries_rpc from ~w in"
            " ~b but current term is: ~b",
-          [LogId, LeaderId, _Term, CurTerm]),
+          [LogId, LeaderId, Term, CurTerm]),
     {follower, State, [cast_reply(Id, LeaderId, Reply)]};
 handle_follower(#heartbeat_rpc{query_index = RpcQueryIndex, term = Term,
                                leader_id = LeaderId},
@@ -1119,12 +1127,12 @@ handle_follower(#request_vote_rpc{term = Term, candidate_id = Cand,
             Reply = #request_vote_result{term = Term, vote_granted = false},
             {follower, State1#{current_term => Term}, [{reply, Reply}]}
     end;
-handle_follower(#request_vote_rpc{term = Term, candidate_id = _Cand},
+handle_follower(#request_vote_rpc{term = Term, candidate_id = Candidate},
                 State = #{current_term := CurTerm,
                           cfg := #cfg{log_id = LogId}})
   when Term < CurTerm ->
     ?INFO("~s: declining vote to ~w for term ~b, current term ~b",
-          [LogId, _Cand, Term, CurTerm]),
+          [LogId, Candidate, Term, CurTerm]),
     Reply = #request_vote_result{term = CurTerm, vote_granted = false},
     {follower, State, [{reply, Reply}]};
 handle_follower({_PeerId, #append_entries_reply{term = TheirTerm}},
@@ -1150,13 +1158,18 @@ handle_follower(#install_snapshot_rpc{term = Term,
 %% need to check if it's the first or last rpc
 %% TODO: must abort pending if for some reason we need to do so
 handle_follower(#install_snapshot_rpc{term = Term,
-                                      meta = #{index := SnapIdx} = Meta,
+                                      meta = #{index := SnapIdx,
+                                               machine_version := SnapMacVer} = Meta,
                                       leader_id = LeaderId,
                                       chunk_state = {1, _ChunkFlag}} = Rpc,
-                #{cfg := #cfg{log_id = LogId}, log := Log0,
+                #{cfg := #cfg{log_id = LogId,
+                              machine_version = MacVer}, log := Log0,
                   last_applied := LastApplied,
                   current_term := CurTerm} = State0)
-  when Term >= CurTerm andalso SnapIdx > LastApplied ->
+  when Term >= CurTerm andalso
+       SnapIdx > LastApplied andalso
+       %% only install snapshot if the machine version is understood
+       MacVer >= SnapMacVer ->
     %% only begin snapshot procedure if Idx is higher than the last_applied
     %% index.
     ?DEBUG("~s: begin_accept snapshot at index ~b in term ~b",
@@ -1189,32 +1202,51 @@ handle_follower(Msg, State) ->
     {follower, State, []}.
 
 handle_receive_snapshot(#install_snapshot_rpc{term = Term,
-                                              meta = #{index := LastIndex,
-                                                       term := LastTerm},
+                                              meta = #{index := SnapIndex,
+                                                       machine_version := SnapMacVer,
+                                                       term := SnapTerm},
                                               chunk_state = {Num, ChunkFlag},
                                               data = Data},
-                        #{cfg := #cfg{id = Id, log_id = LogId},
+                        #{cfg := #cfg{id = Id,
+                                      log_id = LogId,
+                                      effective_machine_version = CurEffMacVer,
+                                      machine_versions = MachineVersions,
+                                      machine = Machine} = Cfg0,
                           log := Log0,
                           current_term := CurTerm} = State0)
   when Term >= CurTerm ->
-    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w",
-           [LogId, Num, ChunkFlag]),
+    ?DEBUG("~s: receiving snapshot chunk: ~b / ~w, index ~b, term ~b",
+           [LogId, Num, ChunkFlag, SnapIndex, SnapTerm]),
     SnapState0 = ra_log:snapshot_state(Log0),
     {ok, SnapState} = ra_snapshot:accept_chunk(Data, Num, ChunkFlag,
                                                SnapState0),
     Reply = #install_snapshot_result{term = CurTerm,
-                                     last_term = LastTerm,
-                                     last_index = LastIndex},
+                                     last_term = SnapTerm,
+                                     last_index = SnapIndex},
     case ChunkFlag of
         last ->
             %% this is the last chunk so we can "install" it
-            {Log, Effs} = ra_log:install_snapshot({LastIndex, LastTerm},
+            {Log, Effs} = ra_log:install_snapshot({SnapIndex, SnapTerm},
                                                   SnapState, Log0),
+            %% if the machine version of the snapshot is higher
+            %% we also need to update the current effective machine configuration
+            Cfg = case SnapMacVer > CurEffMacVer of
+                      true ->
+                          EffMacMod = ra_machine:which_module(Machine, SnapMacVer),
+                          Cfg0#cfg{effective_machine_version = SnapMacVer,
+                                   machine_versions = [{SnapIndex, SnapMacVer}
+                                                       | MachineVersions],
+                                   effective_machine_module = EffMacMod};
+                      false ->
+                          Cfg0
+                  end,
+
             {#{cluster := ClusterIds}, MacState} = ra_log:recover_snapshot(Log),
-            State = State0#{log => Log,
+            State = State0#{cfg => Cfg,
+                            log => Log,
                             current_term => Term,
-                            commit_index => LastIndex,
-                            last_applied => LastIndex,
+                            commit_index => SnapIndex,
+                            last_applied => SnapIndex,
                             cluster => make_cluster(Id, ClusterIds),
                             machine_state => MacState},
             %% it was the last snapshot chunk so we can revert back to
@@ -1225,9 +1257,13 @@ handle_receive_snapshot(#install_snapshot_rpc{term = Term,
             State = State0#{log => Log},
             {receive_snapshot, State, [{reply, Reply}]}
     end;
-handle_receive_snapshot({ra_log_event, Evt}, State = #{log := Log0}) ->
+handle_receive_snapshot({ra_log_event, Evt},
+                        State = #{cfg := #cfg{id = _Id, log_id = LogId},
+                                  log := Log0}) ->
+    ?DEBUG("~s: ~s ra_log_event received: ~w",
+          [LogId, ?FUNCTION_NAME, Evt]),
     % simply forward all other events to ra_log
-    % whilst the snapshot is being written
+    % whilst the snapshot is being received
     {Log, Effects} = ra_log:handle_event(Evt, Log0),
     {receive_snapshot, State#{log => Log}, Effects};
 handle_receive_snapshot(receive_snapshot_timeout, #{log := Log0} = State) ->
@@ -1248,6 +1284,8 @@ handle_receive_snapshot(Msg, State) ->
     {ra_state(), ra_server_state(), effects()}.
 handle_await_condition(#request_vote_rpc{} = Msg, State) ->
     {follower, State, [{next_event, Msg}]};
+handle_await_condition(#pre_vote_rpc{} = PreVote, State) ->
+    process_pre_vote(await_condition, PreVote, State);
 handle_await_condition(election_timeout, State) ->
     call_for_election(pre_vote, State);
 handle_await_condition(await_condition_timeout,
@@ -1405,6 +1443,10 @@ current_term(State) ->
 -spec machine_version(ra_server_state()) -> non_neg_integer().
 machine_version(#{cfg := #cfg{machine_version = MacVer}}) ->
     MacVer.
+
+-spec machine(ra_server_state()) -> ra_machine:machine().
+machine(#{cfg := #cfg{machine = Machine}}) ->
+    Machine.
 
 -spec machine_query(fun((term()) -> term()), ra_server_state()) ->
     {ra_idxterm(), term()}.
@@ -1733,11 +1775,16 @@ handle_down(leader, machine, Pid, Info, State)
     handle_leader({command, {'$usr', #{ts => erlang:system_time(millisecond)},
                             {down, Pid, Info}, noreply}},
                   State);
-handle_down(leader, snapshot_sender, Pid, Info,
+handle_down(RaftState, snapshot_sender, Pid, Info,
             #{cfg := #cfg{log_id = LogId}} = State)
-  when is_pid(Pid) ->
-    ?DEBUG("~s: Snapshot sender process ~w exited with ~W",
-          [LogId, Pid, Info, 10]),
+  when (RaftState == leader orelse
+        RaftState == await_condition)
+       andalso is_pid(Pid)  ->
+    %% if a rebalance is being done we also need to handle snapshot_sender
+    %% downs here
+    ?DEBUG_IF(Info /= normal,
+              "~s: Snapshot sender process ~w exited with ~W",
+              [LogId, Pid, Info, 10]),
     {leader, peer_snapshot_process_exited(Pid, State), []};
 handle_down(RaftState, snapshot_writer, Pid, Info,
             #{cfg := #cfg{log_id = LogId}, log := Log0} = State)
@@ -1814,19 +1861,15 @@ log_fold(#{log := Log} = RaState, Fun, State) ->
     end.
 
 %% reads user commands at the specified index
--spec read_at(ra_index(), ra_server_state()) ->
-    {ok, term(), ra_server_state()} |
+-spec log_read([ra_index()], ra_server_state()) ->
+    {ok, [term()], ra_server_state()} |
     {error, ra_server_state()}.
-read_at(Idx, #{log := Log0,
-               cfg := #cfg{log_id = LogId}} = RaState) ->
-    case ra_log:fetch(Idx, Log0) of
-        {{Idx, _, {'$usr', _, Data, _}}, Log} ->
-            {ok, Data, RaState#{log => Log}};
-        {Cmd, Log} ->
-            ?ERROR("~s: failed to read user command at ~b. Got ~w",
-                   [LogId, Idx, Cmd]),
-            {error, RaState#{log => Log}}
-    end.
+log_read(Indexes, #{log := Log0} = State) ->
+    {Entries, Log} = ra_log:sparse_read(Indexes, Log0),
+    {ok,
+     [Data || {_Idx, _Term, {'$usr', _, Data, _}} <- Entries],
+     State#{log => Log}}.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -1914,18 +1957,18 @@ process_pre_vote(FsmState, #pre_vote_rpc{term = Term, candidate_id = Cand,
             case FsmState of
                 follower ->
                     {FsmState, State, [start_election_timeout]};
-                pre_vote ->
+                _ ->
                     {FsmState, State,
                      [{reply, pre_vote_result(Term, Token, false)}]}
             end
     end;
 process_pre_vote(FsmState, #pre_vote_rpc{term = Term,
                                          token = Token,
-                                         candidate_id = _Cand},
+                                         candidate_id = Candidate},
                 #{current_term := CurTerm} = State)
   when Term < CurTerm ->
     ?DEBUG("~s declining pre-vote to ~w for term ~b, current term ~b",
-           [log_id(State), _Cand, Term, CurTerm]),
+           [log_id(State), Candidate, Term, CurTerm]),
     {FsmState, State,
      [{reply, pre_vote_result(CurTerm, Token, false)}]}.
 
@@ -2126,10 +2169,10 @@ apply_to(_ApplyTo, _, Notifys, Effects, State)
     FinalEffs = make_notify_effects(Notifys, lists:reverse(Effects)),
     {State, FinalEffs}.
 
-make_notify_effects(Nots, Prior) ->
-    maps:fold(fun (Pid, Corrs, Acc) ->
-                      [{notify, Pid, lists:reverse(Corrs)} | Acc]
-              end, Prior, Nots).
+make_notify_effects(Nots, Prior) when map_size(Nots) > 0 ->
+    [{notify, Nots} | Prior];
+make_notify_effects(_Nots, Prior) ->
+      Prior.
 
 apply_with(_Cmd,
            {Mod, LastAppliedIdx,
@@ -2207,7 +2250,7 @@ apply_with({Idx, Term, {noop, CmdMeta, NextMacVer}},
             %% enable cluster change if the noop command is for the current term
             Cfg = Cfg0#cfg{effective_machine_version = NextMacVer,
                            %% record this machine version "term"
-                           machine_versions = [{Idx, MacVer} | MacVersions],
+                           machine_versions = [{Idx, NextMacVer} | MacVersions],
                            effective_machine_module = Module},
             State = State0#{cfg => Cfg,
                             cluster_change_permitted => ClusterChangePerm},
@@ -2622,7 +2665,11 @@ consistent_query_reply({From, QueryFun, _ReadCommitIndex},
     Result = ra_machine:query(MacMod, QueryFun, MacState),
     {reply, From, {ok, Result, Id}}.
 
-process_pending_consistent_queries(#{cluster_change_permitted := false} = State0, Effects0) ->
+process_pending_consistent_queries(#{cluster_change_permitted := false} = State0,
+                                   Effects0) ->
+    {State0, Effects0};
+process_pending_consistent_queries(#{pending_consistent_queries := []} = State0,
+                                   Effects0) ->
     {State0, Effects0};
 process_pending_consistent_queries(#{cluster_change_permitted := true,
                                      pending_consistent_queries := Pending} = State0,
