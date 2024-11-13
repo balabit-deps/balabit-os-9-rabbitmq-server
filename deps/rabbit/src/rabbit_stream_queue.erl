@@ -44,12 +44,15 @@
 -export([status/2,
          tracking_status/2]).
 
+-export([check_max_segment_size_bytes/1]).
+
 -include_lib("rabbit_common/include/rabbit.hrl").
 -include("amqqueue.hrl").
 
 -define(INFO_KEYS, [name, durable, auto_delete, arguments, leader, members, online, state,
                     messages, messages_ready, messages_unacknowledged, committed_offset,
-                    policy, operator_policy, effective_policy_definition, type, memory]).
+                    policy, operator_policy, effective_policy_definition, type, memory,
+                    consumers]).
 
 -type appender_seq() :: non_neg_integer().
 
@@ -90,12 +93,25 @@ declare(Q0, Node) when ?amqqueue_is_stream(Q0) ->
     case rabbit_queue_type_util:run_checks(
            [fun rabbit_queue_type_util:check_auto_delete/1,
             fun rabbit_queue_type_util:check_exclusive/1,
-            fun rabbit_queue_type_util:check_non_durable/1],
+            fun rabbit_queue_type_util:check_non_durable/1,
+            fun rabbit_stream_queue:check_max_segment_size_bytes/1],
            Q0) of
         ok ->
             create_stream(Q0, Node);
         Err ->
             Err
+    end.
+
+check_max_segment_size_bytes(Q) ->
+    Args = amqqueue:get_arguments(Q),
+    case rabbit_misc:table_lookup(Args, <<"x-stream-max-segment-size-bytes">>) of
+        undefined ->
+            ok;
+        {_Type, Val} when Val > ?MAX_STREAM_MAX_SEGMENT_SIZE ->
+            {protocol_error, precondition_failed, "Exceeded max value for x-stream-max-segment-size-bytes",
+             []};
+        _ ->
+            ok
     end.
 
 create_stream(Q0, Node) ->
@@ -199,6 +215,7 @@ consume(Q, Spec, QState0) when ?amqqueue_is_stream(Q) ->
                 {error, _} = Err ->
                     Err;
                 {ok, OffsetSpec} ->
+                    rabbit_stream_coordinator:register_local_member_listener(Q),
                     rabbit_core_metrics:consumer_created(ChPid, ConsumerTag, ExclusiveConsume,
                                                          not NoAck, QName,
                                                          ConsumerPrefetchCount, false,
@@ -283,22 +300,26 @@ begin_stream(#stream_client{name = QName, readers = Readers0} = State0,
                            log = Seg0,
                            max = Max},
             Actions = [],
-            %% TODO: we need to monitor the local pid in case the stream is
-            %% restarted
             {ok, State#stream_client{local_pid = LocalPid,
                                      readers = Readers0#{Tag => Str0}}, Actions}
     end.
 
 cancel(_Q, ConsumerTag, OkMsg, ActingUser, #stream_client{readers = Readers0,
                                                           name = QName} = State) ->
-    Readers = maps:remove(ConsumerTag, Readers0),
-    rabbit_core_metrics:consumer_deleted(self(), ConsumerTag, QName),
-    rabbit_event:notify(consumer_deleted, [{consumer_tag, ConsumerTag},
-                                           {channel, self()},
-                                           {queue, QName},
-                                           {user_who_performed_action, ActingUser}]),
-    maybe_send_reply(self(), OkMsg),
-    {ok, State#stream_client{readers = Readers}}.
+    case maps:take(ConsumerTag, Readers0) of
+        {#stream{log = Log}, Readers} ->
+            ok = close_log(Log),
+            rabbit_core_metrics:consumer_deleted(self(), ConsumerTag, QName),
+            rabbit_event:notify(consumer_deleted,
+                                [{consumer_tag, ConsumerTag},
+                                 {channel, self()},
+                                 {queue, QName},
+                                 {user_who_performed_action, ActingUser}]),
+            maybe_send_reply(self(), OkMsg),
+            {ok, State#stream_client{readers = Readers}};
+        error ->
+            {ok, State}
+    end.
 
 credit(CTag, Credit, Drain, #stream_client{readers = Readers0,
                                            name = Name,
@@ -406,7 +427,30 @@ handle_event({osiris_offset, _From, _Offs},
                   || {Tag, _LeaderPid, OffsetMsg} <- TagMsgs],
     {ok, State#stream_client{readers = Readers}, Deliveries};
 handle_event({stream_leader_change, Pid}, State) ->
-    {ok, update_leader_pid(Pid, State), []}.
+    {ok, update_leader_pid(Pid, State), []};
+handle_event({stream_local_member_change, Pid}, #stream_client{local_pid = P} = State)
+  when P == Pid ->
+    {ok, State, []};
+handle_event({stream_local_member_change, Pid}, State = #stream_client{name = QName,
+                                                                       readers = Readers0}) ->
+    rabbit_log:debug("Local member change event for ~p", [QName]),
+    Readers1 = maps:fold(fun(T, #stream{log = Log0} = S0, Acc) ->
+                                 Offset = osiris_log:next_offset(Log0),
+                                 osiris_log:close(Log0),
+                                 CounterSpec = {{?MODULE, QName, self()}, []},
+                                 rabbit_log:debug("Re-creating Osiris reader for consumer ~p at offset ~p", [T, Offset]),
+                                 {ok, Log1} = osiris:init_reader(Pid, Offset, CounterSpec),
+                                 NextOffset = osiris_log:next_offset(Log1) - 1,
+                                 rabbit_log:debug("Registering offset listener at offset ~p", [NextOffset]),
+                                 osiris:register_offset_listener(Pid, NextOffset),
+                                 S1 = S0#stream{listening_offset = NextOffset,
+                                                log = Log1},
+                                 Acc#{T => S1}
+
+                         end, #{}, Readers0),
+    {ok, State#stream_client{local_pid = Pid, readers = Readers1}, []};
+handle_event(eol, _State) ->
+    eol.
 
 is_recoverable(Q) ->
     Node = node(),
@@ -439,7 +483,7 @@ settle(_, _, _, #stream_client{name = Name}) ->
      "basic.nack and basic.reject not supported by stream queues ~s",
      [rabbit_misc:rs(Name)]}.
 
-info(Q, all_items) ->
+info(Q, all_keys) ->
     info(Q, ?INFO_KEYS);
 info(Q, Items) ->
     lists:foldr(fun(Item, Acc) ->
@@ -459,6 +503,22 @@ i(leader, Q) when ?is_amqqueue(Q) ->
 i(members, Q) when ?is_amqqueue(Q) ->
     #{nodes := Nodes} = amqqueue:get_type_state(Q),
     Nodes;
+i(consumers, Q) when ?is_amqqueue(Q) ->
+    QName = amqqueue:get_name(Q),
+    #{nodes := Nodes} = amqqueue:get_type_state(Q),
+    Spec = [{{{'$1', '_', '_'}, '_', '_', '_', '_', '_', '_'}, [{'==', {QName}, '$1'}], [true]}],
+    lists:foldl(fun(N, Acc) ->
+                        case rabbit_misc:rpc_call(N,
+                                                  ets,
+                                                  select_count,
+                                                  [consumer_created, Spec],
+                                                  10000) of
+                            Count when is_integer(Count) ->
+                                Acc + Count;
+                            _ ->
+                                Acc
+                        end
+                end, 0, Nodes);
 i(memory, Q) when ?is_amqqueue(Q) ->
     %% Return writer memory. It's not the full memory usage (we also have replica readers on
     %% the writer node), but might be good enough
@@ -844,15 +904,13 @@ recover(Q) ->
     {ok, Q}.
 
 check_queue_exists_in_local_node(Q) ->
-    Conf = amqqueue:get_type_state(Q),
-    AllNodes = [maps:get(leader_node, Conf) |
-                maps:get(replica_nodes, Conf)],
-    case lists:member(node(), AllNodes) of
-        true ->
+    #{name := StreamId} = amqqueue:get_type_state(Q),
+    case rabbit_stream_coordinator:local_pid(StreamId) of
+        {ok, Pid} when is_pid(Pid) ->
             ok;
-        false ->
+        _ ->
             {protocol_error, precondition_failed,
-             "queue '~s' does not a have a replica on the local node",
+             "queue '~s' does not have a replica on the local node",
              [rabbit_misc:rs(amqqueue:get_name(Q))]}
     end.
 
@@ -1044,3 +1102,7 @@ select_first_matching_node([{N, _} | Rest], Replicas) ->
         true -> N;
         false -> select_first_matching_node(Rest, Replicas)
     end.
+
+close_log(undefined) -> ok;
+close_log(Log) ->
+    osiris_log:close(Log).

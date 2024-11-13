@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @doc The primary module for interacting with ra servers and clusters.
 
@@ -31,6 +31,7 @@
          leader_query/3,
          consistent_query/2,
          consistent_query/3,
+         ping/2,
          % cluster operations
          start_cluster/2,
          start_cluster/3,
@@ -71,6 +72,7 @@
          new_uid/1,
          %% rebalancing
          transfer_leadership/2,
+         %% auxiliary commands
          aux_command/2,
          cast_aux_command/2,
          register_external_log_reader/1
@@ -403,7 +405,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
     case Started of
         [] ->
             ?ERR("ra: failed to form a new cluster ~w.~n "
-                  "No servers were succesfully started.",
+                  "No servers were successfully started.",
                   [ClusterName]),
             {error, cluster_not_formed};
         _ ->
@@ -436,7 +438,7 @@ start_cluster(System, [#{cluster_name := ClusterName} | _] = ServerConfigs,
 %% @param ClusterName the name of the cluster.
 %% @param ServerId the ra_server_id() of the server
 %% @param Machine The {@link ra_machine:machine/0} configuration.
-%% @param ServerConfigs a list of initial server configurations
+%% @param ServerIds a list of initial (seed) server configurations
 %% @returns
 %% `{ok, Started, NotStarted}'  if a cluster could be successfully
 %% started. A cluster can be successfully started if more than half of the
@@ -709,19 +711,24 @@ overview() ->
 %% @end
 -spec overview(atom()) -> map() | system_not_started.
 overview(System) ->
-
-    #{names := #{segment_writer := SegWriter,
-                 open_mem_tbls := OpenTbls,
-                 closed_mem_tbls := ClosedTbls}} = ra_system:fetch(System),
-    #{node => node(),
-      servers => ra_directory:overview(System),
-      %% TODO:filter counter keys by system
-      counters => ra_counters:overview(),
-      wal => #{status => lists:nth(5, element(4, sys:get_status(ra_log_wal))),
-               open_mem_tables => ets:info(OpenTbls, size),
-               closed_mem_tables => ets:info(ClosedTbls, size)},
-      segment_writer => ra_log_segment_writer:overview(SegWriter)
-     }.
+    case ra_system:fetch(System) of
+        undefined ->
+            system_not_started;
+        Config ->
+            #{names := #{segment_writer := SegWriter,
+                         open_mem_tbls := OpenTbls,
+                         closed_mem_tbls := ClosedTbls,
+                         wal := Wal}} = Config,
+            #{node => node(),
+              servers => ra_directory:overview(System),
+              %% TODO:filter counter keys by system
+              counters => ra_counters:overview(),
+              wal => #{status => lists:nth(5, element(4, sys:get_status(Wal))),
+                       open_mem_tables => ets:info(OpenTbls, size),
+                       closed_mem_tables => ets:info(ClosedTbls, size)},
+              segment_writer => ra_log_segment_writer:overview(SegWriter)
+             }
+    end.
 
 %% @doc Submits a command to a ra server. Returns after the command has
 %% been applied to the Raft state machine. If the state machine returned a
@@ -767,7 +774,7 @@ process_command(ServerId, Command) ->
 %% to implement reliable async interactions with the ra system. The calling
 %% process can retain a map of commands that have not yet been applied to the
 %% state machine successfully and resend them if a notification is not received
-%% withing some time window.
+%% within some time window.
 %% When the submitted command(s) is applied to the state machine, the ra server will send
 %% the calling process a ra_event of the following structure:
 %%
@@ -807,7 +814,7 @@ process_command(ServerId, Command) ->
 -spec pipeline_command(ServerId :: ra_server_id(), Command :: term(),
                        Correlation :: ra_server:command_correlation() |
                        no_correlation,
-                       Priority :: normal | low) -> ok.
+                       Priority :: ra_server:command_priority()) -> ok.
 pipeline_command(ServerId, Command, Correlation, Priority)
   when Correlation /= no_correlation ->
     Cmd = usr(Command, {notify, Correlation, self()}),
@@ -831,10 +838,14 @@ pipeline_command(ServerId, Command, Correlation) ->
     pipeline_command(ServerId, Command, Correlation, low).
 
 
+-spec ping(ServerId :: ra_server_id(), Timeout :: timeout()) -> safe_call_ret({pong, states()}).
+ping(ServerId, Timeout) ->
+    ra_server_proc:ping(ServerId, Timeout).
+
 %% @doc Sends a command to the ra server using a gen_statem:cast without
 %% any correlation identifier.
 %% Effectively the same as
-%% `ra:pipeline_command(ServerId, Command, low, no_correlation)'
+%% `ra:pipeline_command(ServerId, Command, no_correlation, low)'
 %% This is the least reliable way to interact with a ra system ("fire and forget")
 %% and should only be used for commands that are of little importance
 %% and/or where waiting for a response is prohibitively slow.
@@ -972,6 +983,14 @@ members({local, ServerId}, Timeout) ->
 members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, members, Timeout).
 
+%% @doc Returns a list of initial (seed) cluster members.
+%%
+%% This allows Ra-based systems with dynamic cluster membership
+%% discover the original set of members and use them to seed newly
+%% joining ones.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @end
 -spec initial_members(ra_server_id() | [ra_server_id()]) ->
     ra_server_proc:ra_leader_call_ret([ra_server_id()] | error).
 initial_members(ServerId) ->
@@ -983,17 +1002,27 @@ initial_members(ServerId, Timeout) ->
     ra_server_proc:state_query(ServerId, initial_members, Timeout).
 
 %% @doc Transfers leadership from the leader to a follower.
-%% Returns `already_leader' if the transfer targer is already the leader.
+%% Returns `already_leader' if the transfer target is already the leader.
 %% @end
 -spec transfer_leadership(ra_server_id(), ra_server_id()) ->
     ok | already_leader | {error, term()} | {timeout, ra_server_id()}.
 transfer_leadership(ServerId, TargetServerId) ->
     ra_server_proc:transfer_leadership(ServerId, TargetServerId, ?DEFAULT_TIMEOUT).
 
+%% @doc Executes (using a call) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec aux_command(ra_server_id(), term()) -> term().
 aux_command(ServerRef, Cmd) ->
     gen_statem:call(ServerRef, {aux_command, Cmd}).
 
+%% @doc Executes (using a cast) an auxiliary command that the state machine can handle.
+%%
+%% @param ServerId the Ra server(s) to send the query to
+%% @param Command an arbitrary term that the state machine can handle
+%% @end
 -spec cast_aux_command(ra_server_id(), term()) -> ok.
 cast_aux_command(ServerRef, Cmd) ->
     gen_statem:cast(ServerRef, {aux_command, Cmd}).

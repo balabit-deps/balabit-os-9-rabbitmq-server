@@ -15,24 +15,25 @@ defmodule RabbitMQ.CLI.Ctl.Commands.ListQueuesCommand do
 
   @default_timeout 60_000
   @info_keys ~w(name durable auto_delete
-            arguments policy pid owner_pid exclusive exclusive_consumer_pid
+            arguments policy operator_policy effective_policy_definition
+            pid owner_pid exclusive exclusive_consumer_pid
             exclusive_consumer_tag messages_ready messages_unacknowledged messages
             messages_ready_ram messages_unacknowledged_ram messages_ram
             messages_persistent message_bytes message_bytes_ready
             message_bytes_unacknowledged message_bytes_ram message_bytes_persistent
             head_message_timestamp disk_reads disk_writes consumers
-            # these are aliases
             consumer_utilisation consumer_capacity
             memory slave_pids synchronised_slave_pids state type
             leader members online)a
 
   def description(), do: "Lists queues and their properties"
-  def usage(), do: "list_queues [--vhost <vhost>] [--online] [--offline] [--local] [--no-table-headers] [<column>, ...]"
+
+  def usage(),
+    do:
+      "list_queues [--vhost <vhost>] [--online] [--offline] [--local] [--no-table-headers] [<column>, ...]"
+
   def scopes(), do: [:ctl, :diagnostics]
-  def switches(), do: [offline: :boolean,
-                       online: :boolean,
-                       local: :boolean,
-                       timeout: :integer]
+  def switches(), do: [offline: :boolean, online: :boolean, local: :boolean, timeout: :integer]
   def aliases(), do: [t: :timeout]
 
   def info_keys(), do: @info_keys

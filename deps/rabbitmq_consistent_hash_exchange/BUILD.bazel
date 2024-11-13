@@ -1,12 +1,13 @@
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load(
     "//:rabbitmq.bzl",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
     "assert_suites",
     "broker_for_integration_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
 )
 
 APP_NAME = "rabbitmq_consistent_hash_exchange"
@@ -18,27 +19,34 @@ BUILD_DEPS = [
 ]
 
 DEPS = [
-    "//deps/rabbit_common:bazel_erlang_lib",
+    "//deps/rabbit_common:erlang_app",
 ]
 
 RUNTIME_DEPS = [
-    "//deps/rabbit:bazel_erlang_lib",
+    "//deps/rabbit:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_name = APP_NAME,
     build_deps = BUILD_DEPS,
     runtime_deps = RUNTIME_DEPS,
     deps = DEPS,
 )
 
-xref(tags = ["xref"])
+xref(
+    additional_libs = BUILD_DEPS,
+)
+
+plt(
+    name = "base_plt",
+    deps = DEPS,
+)
 
 dialyze(
-    dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
-    plt = "//:base_plt",
-    tags = ["dialyze"],
+    dialyzer_opts = RABBITMQ_DIALYZER_OPTS + ["-Wno_undefined_callbacks"],
+    plt = ":base_plt",
 )
 
 broker_for_integration_suites()
@@ -49,6 +57,7 @@ suites = [
     rabbitmq_integration_suite(
         PACKAGE,
         name = "rabbit_exchange_type_consistent_hash_SUITE",
+        shard_count = 3,
     ),
 ]
 

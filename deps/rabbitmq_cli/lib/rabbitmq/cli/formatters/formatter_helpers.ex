@@ -6,7 +6,7 @@
 
 defmodule RabbitMQ.CLI.Formatters.FormatterHelpers do
   import RabbitCommon.Records
-  use Bitwise
+  import Bitwise
 
   @type error :: {:error, term()} | {:error, integer(), String.t() | [String.t()]}
 
@@ -32,7 +32,6 @@ defmodule RabbitMQ.CLI.Formatters.FormatterHelpers do
   def proplist?([{_key, _value} | rest]), do: proplist?(rest)
   def proplist?([]), do: true
   def proplist?(_other), do: false
-
 
   defmacro is_u8(x) do
     quote do

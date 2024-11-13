@@ -12,7 +12,7 @@
 -type campaign_ctx() :: #{campaign => map()|'waiting_campaign_response', http2_pid => pid(), monitor_ref => reference(), stream_ref => reference()}.
 
 %%% @doc Creates a blank context for a request.
--spec new(atom()|reference()) -> context().
+-spec new(name()|context()) -> context().
 new(Ctx) -> eetcd:new(Ctx).
 
 %% @doc Timeout is an integer greater than zero which specifies how many milliseconds to wait for a reply,
@@ -163,7 +163,7 @@ campaign_response(CCtx, Msg) ->
 proclaim(Ctx) ->
     eetcd_election_gen:proclaim(Ctx).
 
--spec proclaim(Ctx :: context()|name(), Leader :: map(), Value :: binary()) ->
+-spec proclaim(Ctx :: context()|name(), Leader :: binary(), Value :: binary()) ->
     {ok, router_pb:'Etcd.ProclaimResponse'()} | {error, eetcd_error()}.
 proclaim(Ctx, Leader, Val) ->
     Ctx1 = new(Ctx),
@@ -285,12 +285,22 @@ observe_stream(OCtx, Msg) ->
 resp_stream(#{stream_ref := Ref, http2_pid := Pid},
     {gun_response, Pid, Ref, nofin, 200, _Headers}) ->
     receive {gun_data, Pid, Ref, nofin, Bin} ->
-        {ok, Bin}
+        receive {gun_trailers, Pid, Ref, [{<<"grpc-status">>, <<"0">>}, {<<"grpc-message">>, <<>>}]} ->
+            {ok, Bin};
+        {gun_trailers, Pid, Ref, [{<<"grpc-status">>, GrpcStatus}, {<<"grpc-message">>, GrpcMsg}]} ->
+            {error, ?GRPC_ERROR(GrpcStatus, GrpcMsg)}
+        after 2000 -> unknown
+        end
     after 2000 -> unknown
     end;
 resp_stream(#{stream_ref := Ref, http2_pid := Pid},
     {gun_data, Pid, Ref, nofin, Bin}) ->
     {ok, Bin};
+resp_stream(#{stream_ref := SRef, http2_pid := Pid, monitor_ref := MRef},
+    {gun_trailers, Pid, SRef, [{<<"grpc-status">>, GrpcStatus}, {<<"grpc-message">>, GrpcMsg}]}) ->    %% grpc error
+    erlang:demonitor(MRef, [flush]),
+    gun:cancel(Pid, SRef),
+    {error, ?GRPC_ERROR(GrpcStatus, GrpcMsg)};
 resp_stream(#{stream_ref := SRef, http2_pid := Pid, monitor_ref := MRef},
     {gun_error, Pid, SRef, Reason}) -> %% stream error
     erlang:demonitor(MRef, [flush]),

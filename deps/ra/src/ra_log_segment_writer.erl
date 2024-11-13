@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 %% @hidden
 -module(ra_log_segment_writer).
@@ -32,6 +32,7 @@
 -include("ra.hrl").
 
 -define(AWAIT_TIMEOUT, 30000).
+-define(SEGMENT_WRITER_RECOVERY_TIMEOUT, 30000).
 
 -define(COUNTER_FIELDS,
         [mem_tables,
@@ -63,17 +64,18 @@ accept_mem_tables(SegmentWriter, Tables, WalFile) ->
 
 -spec truncate_segments(atom() | pid(), ra_uid(), ra_log:segment_ref()) -> ok.
 truncate_segments(SegWriter, Who, SegRef) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     % truncate all closed segment files
     gen_server:cast(SegWriter, {truncate_segments, Who, SegRef}).
 
 -spec my_segments(atom() | pid(), ra_uid()) -> [file:filename()].
 my_segments(SegWriter, Who) ->
+    maybe_wait_for_segment_writer(SegWriter, ?SEGMENT_WRITER_RECOVERY_TIMEOUT),
     gen_server:call(SegWriter, {my_segments, Who}, infinity).
 
 -spec overview(atom() | pid()) -> #{}.
 overview(SegWriter) ->
     gen_server:call(SegWriter, overview).
-
 
 await(SegWriter)  ->
     IsAlive = fun IsAlive(undefined) -> false;
@@ -116,6 +118,11 @@ segments_for(UId, #state{data_dir = DataDir}) ->
     Dir = filename:join(DataDir, ra_lib:to_list(UId)),
     segment_files(Dir).
 
+handle_cast({mem_tables, [Table], WalFile}, State) ->
+    ok = counters:add(State#state.counter, ?C_MEM_TABLES, 1),
+    ok = do_segment(Table, State),
+    _ = prim_file:delete(WalFile),
+    {noreply, State};
 handle_cast({mem_tables, Tables, WalFile}, State) ->
     ok = counters:add(State#state.counter, ?C_MEM_TABLES, length(Tables)),
     Degree = erlang:system_info(schedulers),
@@ -130,7 +137,7 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
                      %% this is what we expect
                      ok;
                  _ ->
-                     ?ERROR("segment_writer: ~b failures encounted during segment"
+                     ?ERROR("segment_writer: ~b failures encountered during segment"
                             " flush. Errors: ~P", [length(Failures), Failures, 32]),
                      exit(segment_writer_segment_write_failure)
              end
@@ -142,15 +149,12 @@ handle_cast({mem_tables, Tables, WalFile}, State) ->
     ?DEBUG("segment_writer: deleting wal file: ~s",
           [filename:basename(WalFile)]),
     %% temporarily disable wal deletion
-    %% TODO: this shoudl be a debug option config?
+    %% TODO: this should be a debug option config?
     % Base = filename:basename(WalFile),
     % BkFile = filename:join([State0#state.data_dir, "wals", Base]),
     % filelib:ensure_dir(BkFile),
     % file:copy(WalFile, BkFile),
     _ = prim_file:delete(WalFile),
-    %% ensure we release any bin refs that might have been acquired during
-    %% segment write
-    true = erlang:garbage_collect(),
     {noreply, State};
 handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             #state{segment_conf = SegConf} = State0) ->
@@ -172,14 +176,20 @@ handle_cast({truncate_segments, Who, {_From, _To, Name} = SegRef},
             {ok, Seg} = ra_log_segment:open(Pivot, #{mode => read}),
             case ra_log_segment:segref(Seg) of
                 SegRef ->
+                    _ = ra_log_segment:close(Seg),
                     %% it has not changed - we can delete that too
+                    _ = prim_file:delete(Pivot),
                     %% as we are deleting the last segment - create an empty
                     %% successor
-                    _ = ra_log_segment:close(
-                          open_successor_segment(Seg, SegConf)),
-                    _ = ra_log_segment:close(Seg),
-                    _ = prim_file:delete(Pivot),
-                    {noreply, State0};
+                    case open_successor_segment(Seg, SegConf) of
+                        undefined ->
+                            %% directory must have been deleted after the pivot
+                            %% segment was opened
+                            {noreply, State0};
+                        Succ ->
+                            _ = ra_log_segment:close(Succ),
+                            {noreply, State0}
+                    end;
                 _ ->
                     %% the segment has changed - leave it in place
                     _ = ra_log_segment:close(Seg),
@@ -230,10 +240,7 @@ do_segment({ServerUId, StartIdx0, EndIdx, Tid},
                            directory ~s disappeared whilst writing",
                            [ServerUId, Dir]),
                     ok;
-                {Segment1, Closed0} ->
-                    % fsync
-                    {ok, Segment} = ra_log_segment:sync(Segment1),
-
+                {Segment, Closed0} ->
                     % notify writerid of new segment update
                     % includes the full range of the segment
                     % filter out any undefined segrefs
@@ -385,3 +392,20 @@ open_file(Dir, SegConf) ->
                   "error: ~W. Exiting", [File, Err, 10]),
             exit(Err)
     end.
+
+maybe_wait_for_segment_writer(_SegWriter, TimeRemaining)
+  when TimeRemaining < 0 ->
+    error(segment_writer_not_available);
+maybe_wait_for_segment_writer(SegWriter, TimeRemaining)
+  when is_atom(SegWriter) ->
+    case whereis(SegWriter) of
+        undefined ->
+            %% segment writer isn't available yet, sleep a bit
+            timer:sleep(10),
+            maybe_wait_for_segment_writer(SegWriter, TimeRemaining - 10);
+        _ ->
+            ok
+    end;
+maybe_wait_for_segment_writer(_SegWriter, _TimeRemaining) ->
+    ok.
+

@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_log_pre_init).
 
@@ -38,6 +38,8 @@ init([System]) ->
     %% populated before WAL recovery begins to avoid writing unnecessary
     %% indexes to segment files.
     Regd = ra_directory:list_registered(System),
+    ?INFO("ra system '~s' running pre init for ~b registered servers",
+          [System, length(Regd)]),
     _ = [catch(pre_init(System, Name)) || {Name, _U} <- Regd],
     {ok, #state{} , hibernate}.
 

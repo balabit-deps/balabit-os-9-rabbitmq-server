@@ -1,14 +1,15 @@
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze", "plt")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load("//:rabbitmq_home.bzl", "rabbitmq_home")
 load("//:rabbitmq_run.bzl", "rabbitmq_run")
 load(
     "//:rabbitmq.bzl",
     "APP_VERSION",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
     "assert_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
     "rabbitmq_suite",
 )
 
@@ -23,13 +24,14 @@ EXTRA_APPS = [
 ]
 
 DEPS = [
-    "//deps/rabbit:bazel_erlang_lib",
-    "//deps/rabbit_common:bazel_erlang_lib",
-    "@cowboy//:bazel_erlang_lib",
+    "//deps/rabbit:erlang_app",
+    "//deps/rabbit_common:erlang_app",
+    "@cowboy//:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_module = APP_MODULE,
     app_name = APP_NAME,
     app_version = APP_VERSION,
@@ -37,26 +39,27 @@ rabbitmq_lib(
     deps = DEPS,
 )
 
-xref(tags = ["xref"])
+xref()
 
 plt(
     name = "base_plt",
     apps = EXTRA_APPS,
     plt = "//:base_plt",
+    deps = DEPS,
 )
 
 dialyze(
     dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
     plt = ":base_plt",
-    tags = ["dialyze"],
+    warnings_as_errors = False,
 )
 
 rabbitmq_home(
     name = "broker-for-tests-home",
     testonly = True,
     plugins = [
-        "//deps/rabbit:bazel_erlang_lib",
-        ":test_bazel_erlang_lib",
+        "//deps/rabbit:erlang_app",
+        ":test_erlang_app",
     ],
 )
 

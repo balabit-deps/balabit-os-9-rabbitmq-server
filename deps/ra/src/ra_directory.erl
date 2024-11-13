@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_directory).
 
@@ -27,9 +27,7 @@
 
 -include("ra.hrl").
 
--define(REVERSE_TBL, ra_directory_reverse).
-
-% registry for a ra servers's locally unique name
+% registry for ra servers' locally unique name
 
 -spec init(atom()) -> ok | {error, system_not_started}.
 init(System) when is_atom(System) ->
@@ -46,8 +44,7 @@ init(Dir, #{directory := Name,
             directory_rev := NameRev}) ->
     _ = ets:new(Name, [named_table,
                           public,
-                          {read_concurrency, true},
-                          {write_concurrency, true}
+                          {read_concurrency, true}
                          ]),
     ok = ra_lib:make_dir(Dir),
     Dets = filename:join(Dir, "names.dets"),

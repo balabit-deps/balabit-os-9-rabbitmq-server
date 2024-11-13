@@ -1,12 +1,13 @@
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze", "plt")
+load("@rules_erlang//:xref2.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "dialyze", "plt")
 load(
     "//:rabbitmq.bzl",
+    "BROKER_VERSION_REQUIREMENTS_ANY",
     "RABBITMQ_DIALYZER_OPTS",
     "assert_suites",
     "broker_for_integration_suites",
+    "rabbitmq_app",
     "rabbitmq_integration_suite",
-    "rabbitmq_lib",
     "rabbitmq_suite",
 )
 
@@ -39,13 +40,14 @@ BUILD_DEPS = [
 ]
 
 DEPS = [
-    "//deps/rabbit_common:bazel_erlang_lib",
-    "//deps/rabbit:bazel_erlang_lib",
+    "//deps/rabbit_common:erlang_app",
+    "//deps/rabbit:erlang_app",
 ]
 
-rabbitmq_lib(
+rabbitmq_app(
     app_description = APP_DESCRIPTION,
     app_env = APP_ENV,
+    app_extra_keys = BROKER_VERSION_REQUIREMENTS_ANY,
     app_module = APP_MODULE,
     app_name = APP_NAME,
     build_deps = BUILD_DEPS,
@@ -53,7 +55,9 @@ rabbitmq_lib(
     deps = DEPS,
 )
 
-xref(tags = ["xref"])
+xref(
+    additional_libs = BUILD_DEPS,
+)
 
 plt_apps = list(EXTRA_APPS)
 
@@ -63,12 +67,13 @@ plt(
     name = "base_plt",
     apps = plt_apps,
     plt = "//:base_plt",
+    deps = DEPS,
 )
 
 dialyze(
-    dialyzer_opts = RABBITMQ_DIALYZER_OPTS,
+    dialyzer_opts = RABBITMQ_DIALYZER_OPTS + ["-Wno_undefined_callbacks"],
     plt = ":base_plt",
-    tags = ["dialyze"],
+    warnings_as_errors = False,
 )
 
 broker_for_integration_suites()
@@ -80,7 +85,7 @@ suites = [
         name = "exometer_slide_SUITE",
         size = "small",
         deps = [
-            "@proper//:bazel_erlang_lib",
+            "@proper//:erlang_app",
         ],
     ),
     rabbitmq_integration_suite(
@@ -97,10 +102,10 @@ suites = [
         name = "rabbit_mgmt_slide_SUITE",
         size = "small",
         runtime_deps = [
-            "//deps/rabbitmq_ct_helpers:bazel_erlang_lib",
+            "//deps/rabbitmq_ct_helpers:erlang_app",
         ],
         deps = [
-            "@proper//:bazel_erlang_lib",
+            "@proper//:erlang_app",
         ],
     ),
 ]

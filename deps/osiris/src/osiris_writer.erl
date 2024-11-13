@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2007-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 %% @hidden
@@ -532,15 +532,16 @@ notify_offset_listeners(#?MODULE{cfg =
                             State) ->
     {Notify, L} =
         lists:partition(fun({_Pid, O, _}) -> O =< COffs end, L0),
-    [begin
-         Evt =
-             wrap_osiris_event(%% the per offset listener event formatter takes precedence of
-                               %% the process scoped one
-                               select_formatter(Fmt, EvtFmt),
-                               {osiris_offset, Ref, COffs}),
-         P ! Evt
-     end
-     || {P, _, Fmt} <- Notify],
+    _ = [begin
+             Evt =
+                 %% the per offset listener event formatter takes precedence of
+                 %% the process scoped one
+                 wrap_osiris_event(
+                   select_formatter(Fmt, EvtFmt),
+                   {osiris_offset, Ref, COffs}),
+             P ! Evt
+         end
+         || {P, _, Fmt} <- Notify],
     State#?MODULE{offset_listeners = L}.
 
 select_formatter(undefined, Fmt) ->

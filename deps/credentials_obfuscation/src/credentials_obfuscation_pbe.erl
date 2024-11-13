@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2019-2020 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2019-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(credentials_obfuscation_pbe).
@@ -65,9 +65,9 @@ decrypt_term(Cipher, Hash, Iterations, Secret, Base64Binary) ->
 %% function accepts that same base64 binary.
 
 -spec encrypt(crypto:cipher_iv(), crypto:hash_algorithm(),
-              pos_integer(), iodata() | '$pending-secret', binary()) -> {plaintext, binary()} | {encrypted, binary()}.
+              pos_integer(), iodata() | '$pending-secret', iodata()) -> {plaintext, binary()} | {encrypted, binary()}.
 encrypt(_Cipher, _Hash, _Iterations, ?PENDING_SECRET, ClearText) ->
-    {plaintext, ClearText};
+    {plaintext, iolist_to_binary(ClearText)};
 encrypt(Cipher, Hash, Iterations, Secret, ClearText) when is_list(ClearText) ->
     encrypt(Cipher, Hash, Iterations, Secret, list_to_binary(ClearText));
 encrypt(Cipher, Hash, Iterations, Secret, ClearText) when is_binary(ClearText) ->

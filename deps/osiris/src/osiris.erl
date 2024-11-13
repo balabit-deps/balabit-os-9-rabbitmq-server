@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2007-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(osiris).
@@ -92,6 +92,7 @@
                        {ok, config()} | {error, term()} |
                        {error, term(), config()}.
 start_cluster(Config00 = #{name := Name}) ->
+    ?DEBUG("osiris: starting new cluster ~s", [Name]),
     true = osiris_util:validate_base64uri(Name),
     %% ensure reference is set
     Config0 = maps:merge(#{reference => Name}, Config00),
@@ -102,9 +103,6 @@ start_cluster(Config00 = #{name := Name}) ->
                 {ok, ReplicaPids} ->
                     {ok, Config#{replica_pids => ReplicaPids}}
             end;
-        % {error, Reason, ReplicaPids} ->
-        %     %% Let the user decide what to do if cluster is only partially started
-        %     {error, Reason, Config#{replica_pids => ReplicaPids}}
         Error ->
             Error
     end.
@@ -255,10 +253,13 @@ start_replicas(Config, [Node | Nodes], ReplicaPids) ->
                 start_replicas(Config, Nodes, [Pid | ReplicaPids]);
             {ok, Pid, _} ->
                 start_replicas(Config, Nodes, [Pid | ReplicaPids]);
+            {error, {already_started, Pid}} ->
+                start_replicas(Config, Nodes, [Pid | ReplicaPids]);
             {error, Reason} ->
-                error_logger:info_msg("osiris:start_replicas failed to start replica "
+                Name = maps:get(name, Config, undefined),
+                error_logger:info_msg("osiris:start_replicas for ~s failed to start replica "
                                       "on ~w, reason: ~w",
-                                      [Node, Reason]),
+                                      [Name, Node, Reason]),
                 %% coordinator might try to start this replica in the future
                 start_replicas(Config, Nodes, ReplicaPids)
         end

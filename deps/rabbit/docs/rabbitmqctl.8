@@ -5,7 +5,7 @@
 .\"
 .\" Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
 .\"
-.Dd June 19, 2021
+.Dd October 26, 2022
 .Dt RABBITMQCTL 8
 .Os "RabbitMQ Server"
 .Sh NAME
@@ -1093,7 +1093,7 @@ Readable name for the connection.
 Server port.
 .It Cm host
 Server hostname obtained via reverse DNS, or its IP address if reverse
-DNS failed or was disabled.
+DNS failed or was turned off.
 .It Cm peer_port
 Peer port.
 .It Cm peer_host
@@ -1314,7 +1314,11 @@ Whether the queue will be deleted automatically when no longer used.
 .It Cm arguments
 Queue arguments.
 .It Cm policy
-Effective policy name for the queue.
+Name of the user policy that is applied to the queue.
+.It Cm operator_policy
+Name of the operator policy that is applied to the queue.
+.It Cm effective_policy_definition
+Effective policy definition for the queue: both user and operator policy definitions merged.
 .It Cm pid
 Erlang process identifier of the queue.
 .It Cm owner_pid
@@ -1560,13 +1564,13 @@ but the key-value pair isn't tied to a virtual host.
 .It Ar name
 The name of the global runtime parameter being set.
 .It Ar value
-The value for the global runtime parameter, as a JSON term.
+The value for the global runtime parameter, as a JSON document.
 In most shells you are very likely to need to quote this.
 .El
 .Pp
 For example, this command sets the global runtime parameter
 .Qq mqtt_default_vhosts
-to the JSON term {"O=client,CN=guest":"/"}:
+to the JSON document {"O=client,CN=guest":"/"}:
 .sp
 .Dl rabbitmqctl set_global_parameter mqtt_default_vhosts '{"O=client,CN=guest":"/"}'
 .\" ------------------------------------------------------------------
@@ -1579,7 +1583,7 @@ The name of the component for which the parameter is being set.
 .It Ar name
 The name of the parameter being set.
 .It Ar value
-The value for the parameter, as a JSON term.
+The value for the parameter, as a JSON document.
 In most shells you are very likely to need to quote this.
 .El
 .Pp
@@ -1630,7 +1634,7 @@ The name of the policy.
 The regular expression, which when matches on a given resources causes
 the policy to apply.
 .It Ar definition
-The definition of the policy, as a JSON term.
+The definition of the policy, as a JSON document.
 In most shells you are very likely to need to quote this.
 .It Ar priority
 The priority of the policy as an integer.
@@ -1746,10 +1750,10 @@ Suppresses the
 parameter.
 .El
 .\" ------------------------------------------------------------------
-.It Cm restart_vhost Ar vhost
+.It Cm restart_vhost Oo Fl p Ar vhost Oc
 .Bl -tag -width Ds
 .It Ar vhost
-The name of the virtual host entry to restart.
+The name of the virtual host entry to restart, defaulting to "/".
 .El
 .Pp
 Restarts a failed vhost data stores and queues.
@@ -1765,7 +1769,7 @@ virtual host called
 Sets virtual host limits.
 .Bl -tag -width Ds
 .It Ar definition
-The definition of the limits, as a JSON term.
+The definition of the limits, as a JSON document.
 In most shells you are very likely to need to quote this.
 .Pp
 Recognised limits are:
@@ -1801,6 +1805,79 @@ This command disables client connections in vhost
 .Qq qa_env :
 .sp
 .Dl rabbitmqctl set_vhost_limits -p qa_env '{"max-connections": 0}'
+.\" ------------------------------------------------------------------
+.It Cm set_user_limits Oc Ar username Oc Ar definition
+.Pp
+Sets user limits.
+.Bl -tag -width Ds
+.It Ar username
+The name of the user to apply limits to
+.It Ar definition
+The definition of the limits, as a JSON document.
+In most shells you are very likely to need to quote this.
+.Pp
+Recognised limits are:
+.Bl -bullet -compact
+.It
+max-connections
+.It
+max-channels
+.El
+.Pp
+Use a negative value to specify "no limit".
+.El
+.Pp
+For example, this command limits the max number of concurrent
+connections a user is allowed to open
+.Qq limited_user
+to 64:
+.sp
+.Dl rabbitmqctl set_user_limits limited_user '{"max-connections": 64}'
+.Pp
+This command limits the max number of channels a user is allowed to open
+on a connection
+.Qq limited_user
+to 16:
+.sp
+.Dl rabbitmqctl set_user_limits limited_user '{"max-channels": 16}'
+.Pp
+This command clears the max number of connections limit for user
+.Qq limited_user :
+.sp
+.Dl rabbitmqctl clear_user_limits limited_user 'max-connections'
+.Pp
+This command disables client connections for user
+.Qq limited_user :
+.sp
+.Dl rabbitmqctl set_user_limits limited_user '{"max-connections": 0}'
+.\" ------------------------------------------------------------------
+.It Cm clear_user_limits Oc Ar username Oc Ar limit
+.Pp
+Clears user limits.
+.Bl -tag -width Ds
+.It Ar username
+The name of the user to clear limits of
+.It Ar limit
+The name of the limit or "all" to clear all limits at once.
+.El
+.Pp
+Recognised limits are:
+.Bl -bullet -compact
+.It
+max-connections
+.It
+max-channels
+.El
+.Pp
+For example, this command clears max connection limits of user
+.Qq limited_user :
+.sp
+.Dl rabbitmqctl clear_user_limits limited_user 'max-connections'
+.Pp
+This command clears all limits of user
+.Qq limited_user :
+.sp
+.Dl rabbitmqctl clear_user_limits limited_user all
 .\" ------------------------------------------------------------------
 .It Cm trace_off Op Fl p Ar vhost
 .Bl -tag -width Ds
@@ -1895,7 +1972,7 @@ Values lower than 1.0 can be dangerous and should be used carefully.
 Sets log level in the running node
 .Pp
 Supported
-.Ar type
+.Ar log_level
 values are:
 .Bl -bullet -compact
 .It
@@ -1906,6 +1983,8 @@ info
 warning
 .It
 error
+.It
+critical
 .It
 none
 .El
@@ -2150,7 +2229,7 @@ SASL authentication mechanism used, such as
 .Qq PLAIN .
 .It Cm host
 Server hostname obtained via reverse DNS, or its IP address if reverse
-DNS failed or was disabled.
+DNS failed or was turned off.
 .It Cm frame_max
 Maximum frame size (bytes).
 .It Cm timeout
@@ -2227,7 +2306,7 @@ can take any value from the list that follows:
 .Bl -tag -width Ds
 .It Cm host
 Server hostname obtained via reverse DNS, or its IP address if reverse
-DNS failed or was disabled.
+DNS failed or was turned off.
 .It Cm port
 Server port.
 .It Cm peer_host

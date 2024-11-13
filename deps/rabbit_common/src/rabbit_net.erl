@@ -6,16 +6,17 @@
 %%
 
 -module(rabbit_net).
--include("rabbit.hrl").
 
 -include_lib("kernel/include/inet.hrl").
+-include_lib("kernel/include/net_address.hrl").
 
 -export([is_ssl/1, ssl_info/1, controlling_process/2, getstat/2,
     recv/1, sync_recv/2, async_recv/3, port_command/2, getopts/2,
     setopts/2, send/2, close/1, fast_close/1, sockname/1, peername/1,
     peercert/1, connection_string/2, socket_ends/2, is_loopback/1,
     tcp_host/1, unwrap_socket/1, maybe_get_proxy_socket/1,
-    hostname/0, getifaddrs/0, proxy_ssl_info/2]).
+    hostname/0, getifaddrs/0, proxy_ssl_info/2,
+    dist_info/0]).
 
 %%---------------------------------------------------------------------------
 
@@ -329,3 +330,65 @@ maybe_get_proxy_socket(Sock={rabbit_proxy_socket, _, _}) ->
     Sock;
 maybe_get_proxy_socket(_Sock) ->
     undefined.
+
+%% deps/prometheus/src/collectors/vm/prometheus_vm_dist_collector.erl
+%% https://github.com/deadtrickster/prometheus.erl/blob/v4.8.2/src/collectors/vm/prometheus_vm_dist_collector.erl#L386-L450
+dist_info() ->
+    {ok, NodesInfo} = net_kernel:nodes_info(),
+    TcpInetPorts = [P || P <- erlang:ports(),
+                         erlang:port_info(P, name) =:= {name, "tcp_inet"}],
+    [dist_info(NodeInfo, TcpInetPorts) || NodeInfo <- NodesInfo].
+
+dist_info({Node, Info}, TcpInetPorts) ->
+    DistPid = proplists:get_value(owner, Info),
+    case proplists:get_value(address, Info, #net_address{}) of
+        #net_address{address=undefined} ->
+            %% No stats available
+            {Node, DistPid, []};
+        #net_address{address=PeerAddr} ->
+            dist_info(Node, TcpInetPorts, DistPid, PeerAddr)
+    end.
+
+dist_info(Node, TcpInetPorts, DistPid, PeerAddrArg) ->
+    case [P || P <- TcpInetPorts, inet:peername(P) =:= {ok, PeerAddrArg}] of
+        %% Note: sometimes the port closes before we get here and thus can't get stats
+        %% See rabbitmq/rabbitmq-server#5490
+        [] ->
+            {Node, DistPid, []};
+        [DistPort] ->
+            S = dist_port_stats(DistPort),
+            {Node, DistPid, S};
+        %% And sometimes there multiple ports, most likely right after a peer node
+        %% restart.
+        DistPorts when is_list(DistPorts) ->
+            ConnectedPorts = lists:filter(fun(Port) ->
+                                            case erlang:port_info(Port, connected) of
+                                                {connected, AssocPid} ->
+                                                    erlang:is_process_alive(AssocPid);
+                                                undefined ->
+                                                    false
+                                            end
+                                          end, DistPorts),
+            case ConnectedPorts of
+                [] ->
+                    {Node, DistPid, []};
+                CPs when is_list(CPs) ->
+                    S = dist_port_stats(hd(CPs)),
+                    {Node, DistPid, S}
+            end
+    end.
+
+dist_port_stats(DistPort) ->
+    case {socket_ends(DistPort, inbound), getstat(DistPort, [recv_oct, send_oct])} of
+        {{ok, {PeerAddr, PeerPort, SockAddr, SockPort}}, {ok, Stats}} ->
+            PeerAddrBin = rabbit_data_coercion:to_binary(maybe_ntoab(PeerAddr)),
+            SockAddrBin = rabbit_data_coercion:to_binary(maybe_ntoab(SockAddr)),
+            [{peer_addr, PeerAddrBin},
+                {peer_port, PeerPort},
+                {sock_addr, SockAddrBin},
+                {sock_port, SockPort},
+                {recv_bytes, rabbit_misc:pget(recv_oct, Stats)},
+                {send_bytes, rabbit_misc:pget(send_oct, Stats)}];
+        _ ->
+            []
+    end.

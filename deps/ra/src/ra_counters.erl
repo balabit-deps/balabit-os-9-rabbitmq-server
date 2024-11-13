@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_counters).
 
@@ -15,17 +15,7 @@
          delete/1
          ]).
 
-%% holds static or rarely changing fields
--record(cfg, {}).
-
--record(?MODULE, {cfg :: #cfg{}}).
-
--opaque state() :: #?MODULE{}.
 -type name() :: term().
-
--export_type([
-              state/0
-              ]).
 
 -spec init() -> ok.
 init() ->
@@ -81,7 +71,3 @@ overview(Name) ->
 register_counter(Name, Ref, Size) ->
     true = ets:insert(?MODULE, {Name, Ref, Size}),
     ok.
-
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.

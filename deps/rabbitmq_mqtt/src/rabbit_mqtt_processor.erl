@@ -96,8 +96,7 @@ add_client_id_to_adapter_info(ClientId, #amqp_adapter_info{additional_info = Add
                       end,
     AdapterInfo#amqp_adapter_info{additional_info = AdditionalInfo2}.
 
-process_request(?CONNECT,
-                #mqtt_frame{ variable = #mqtt_frame_connect{
+process_connect(#mqtt_frame{ variable = #mqtt_frame_connect{
                                            username   = Username,
                                            password   = Password,
                                            proto_ver  = ProtoVersion,
@@ -199,6 +198,17 @@ process_request(?CONNECT,
       ?CONNACK_SERVER      -> {error, unavailable, PState5};
       ?CONNACK_INVALID_ID  -> {error, invalid_client_id, PState5};
       ?CONNACK_PROTO_VER   -> {error, unsupported_protocol_version, PState5}
+    end.
+
+process_request(?CONNECT, Frame, PState = #proc_state{socket = Socket}) ->
+    %% Check whether peer closed the connection.
+    %% For example, this can happen when connection was blocked because of resource
+    %% alarm and client therefore disconnected due to client side CONNACK timeout.
+    case rabbit_net:socket_ends(Socket, inbound) of
+        {error, Reason} ->
+            {error, {socket_ends, Reason}, PState};
+        _ ->
+            process_connect(Frame, PState)
     end;
 
 process_request(?PUBACK,
@@ -548,13 +558,10 @@ maybe_clean_sess(PState = #proc_state { clean_sess = true,
             end
     end.
 
-session_present(VHost, ClientId)  ->
+session_present(VHost, ClientId) ->
     {_, QueueQ1} = rabbit_mqtt_util:subcription_queue_name(ClientId),
     QueueName = rabbit_misc:r(VHost, queue, QueueQ1),
-    case rabbit_amqqueue:lookup(QueueName) of
-        {ok, _} -> true;
-        {error, not_found} -> false
-    end.
+    rabbit_amqqueue:exists(QueueName).
 
 make_will_msg(#mqtt_frame_connect{ will_flag   = false }) ->
     undefined;

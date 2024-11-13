@@ -3,7 +3,7 @@
               {licenses,["ASL2","MPL2"]},
               {links,[{"github",
                        "https://github.com/rabbitmq/gen-batch-server"}]},
-              {vsn,"0.8.6"},
+              {vsn,"0.8.8"},
               {modules,[]},
               {registered,[]},
               {applications,[kernel,stdlib]},

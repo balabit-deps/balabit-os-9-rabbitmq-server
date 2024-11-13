@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2007-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2007-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 
 -module(osiris_server_sup).
@@ -43,7 +43,7 @@ delete_child(Node, #{name := CName} = Config) ->
     try
         case supervisor:get_childspec({?MODULE, Node}, CName) of
             {ok, _} ->
-                stop_child(Node, CName),
+                _ = stop_child(Node, CName),
                 rpc:call(Node, osiris_log, delete_directory, [Config]);
             {error, not_found} ->
                 ok

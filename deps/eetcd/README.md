@@ -10,7 +10,7 @@ Erlang client for the [etcd](https://github.com/etcd-io/etcd) API v3.
 All core features are supported.
 It includes reconnection, transaction, software transactional memory, high-level query builders and lease management, watchers.
 
-See [the full API documentation](https://github.com/etcd-io/etcd/blob/master/Documentation/dev-guide/api_reference_v3.md) for more.
+See [the full v3 API documentation](https://etcd.io/docs/) for more:
 
 1. Adding, Fetching and Deleting Keys;
 2. Transaction;
@@ -43,7 +43,7 @@ Firstly, open eetcd when your application starts.
 -define(NAME, etcd_example_conn).
 
 start(_StartType, _StartArgs) ->
-    Endpoints = ["127.0.0.1:2379", "127.0.0.1:2579", "127.0.0.1:2479"],    
+    Endpoints = ["127.0.0.1:2379", "127.0.0.1:2579", "127.0.0.1:2479"],
     {ok, _Pid} = eetcd:open(?NAME, Endpoints),
     my_sup:start_link().
 
@@ -70,7 +70,7 @@ Ctx3 = eetcd_kv:with_ignore_value(Ctx2),
 {ok,#{header :=
           #{cluster_id := 11360555963653019356,
             member_id := 16409577466894847729,raft_term := 5,
-            revision := 7}}} 
+            revision := 7}}}
      = eetcd_kv:put(Ctx3).
 
 CtxNoExist = eetcd_kv:with_key(Ctx, <<"KeyNoExist">>),
@@ -79,7 +79,7 @@ Ctx6 = eetcd_kv:with_ignore_value(Ctx5),
 
 {error,{grpc_error,#{'grpc-message' :=
                          <<"etcdserver: value is provided">>,
-                     'grpc-status' := 3}}} 
+                     'grpc-status' := 3}}}
     = eetcd_kv:put(Ctx6).
 
 %% fetches
@@ -108,7 +108,7 @@ Ctx3 = eetcd_kv:with_sort(Ctx2, 'KEY', 'ASCEND'),
              mod_revision := 7,value := <<"NewValue">>,version := 1}
            %% ....
           ], more := false}}
-    = eetcd_kv:get(Ctx3).    
+    = eetcd_kv:get(Ctx3).
 
 %% deletes
 {ok,#{deleted := 1,
@@ -140,7 +140,7 @@ Ctx2 = eetcd_kv:with_prefix(Ctx1),
       header := #{revision := Revision},
       kvs :=
           [#{ mod_revision := ModRev,value := Value}],
-      more := false}}    
+      more := false}}
   = eetcd_kv:get(?NAME, Kv1),
 
 Cmp = eetcd_compare:new(Kv1),
@@ -201,18 +201,18 @@ get_exist_services() ->
     Ctx2 = eetcd_kv:with_prefix(Ctx1),
     Ctx3 = eetcd_kv:with_keys_only(Ctx2),
     {ok, #{header := #{revision := Revision}, kvs := Services}} = eetcd_kv:get(Ctx3),
-    Services =
+    Services1 =
         [begin
              [_, Type, IP, Port] = binary:split(Key, [<<"|">>], [global]),
              {{IP, Port}, Type}
          end || #{key := Key} <- Services],
-    {ok, Services, Revision}.
+    {ok, Services1, Revision}.
 
 watch_services_event(Revision) ->
     ReqInit = eetcd_watch:new(),
     ReqKey = eetcd_watch:with_key(ReqInit, <<"heartbeat:">>),
     ReqPrefix = eetcd_watch:with_prefix(ReqKey),
-    Req = eetcd_watch:with_start_revision(ReqPrefix, Revision),
+    Req = eetcd_watch:with_start_revision(ReqPrefix, Revision + 1),
     eetcd_watch:watch(?NAME, Req).
 
 handle_info(Msg, Conn) ->
@@ -223,7 +223,14 @@ handle_info(Msg, Conn) ->
         {more, NewConn} ->
             {noreply, NewConn};
         {error, _Reason} ->
-            #{revision := Revision} = Conn,
+            #{watch_ids := Ids} = Conn,
+            %% We expect there is only one watch in the Conn in this example
+            %%
+            %% TODO
+            %% If there are more than one watch (aka multiplexing watch stream),
+            %% this watcher process should keep the corresponding key/prefix to the watch id,
+            %% to retrieve the correct revision of it.
+            [#{revision := Revision}] = maps:values(Ids),
             {ok, NewConn} = watch_services_event(Revision),
             {noreply, NewConn};
         unknown ->
@@ -254,6 +261,8 @@ update_services(#{events := Events}) ->
     ok.
 ```
 
+We can use a single stream for multiplex watches, see [example](/test/eetcd_watch_example.erl).
+
 ##### Election Example
 [Election Example](https://github.com/zhongwencool/eetcd/blob/master/test/eetcd_election_leader_example.erl)
 
@@ -279,6 +288,4 @@ Gen proto and client file
 -----
 ```erlang
 rebar3 etcd gen
-``` 
-
-
+```

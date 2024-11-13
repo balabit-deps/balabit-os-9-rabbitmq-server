@@ -2,7 +2,7 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%
-%% Copyright (c) 2017-2021 VMware, Inc. or its affiliates.  All rights reserved.
+%% Copyright (c) 2017-2022 VMware, Inc. or its affiliates.  All rights reserved.
 %%
 -module(ra_snapshot).
 
@@ -262,10 +262,12 @@ accept_chunk(Chunk, Num, last,
     ok = Mod:complete_accept(Chunk, AccState),
     %% run validate here?
     %% delete the current snapshot if any
-    ok = delete(Dir, Current),
+    _ = spawn(fun () -> delete(Dir, Current) end),
     %% update ets table
     true = ets:insert(?ETSTBL, {UId, Idx}),
     {ok, State#?MODULE{accepting = undefined,
+                       %% reset any pending snapshot writes
+                       pending = undefined,
                        current = IdxTerm}};
 accept_chunk(Chunk, Num, next,
              #?MODULE{module = Mod,

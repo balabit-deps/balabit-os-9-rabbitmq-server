@@ -29,7 +29,8 @@
     transfer_leadership_of_quorum_queues/1,
     transfer_leadership_of_classic_mirrored_queues/1,
     status_table_name/0,
-    status_table_definition/0
+    status_table_definition/0,
+    boot/0
 ]).
 
 -define(TABLE, rabbit_node_maintenance_states).
@@ -43,6 +44,38 @@
 -export_type([
     maintenance_status/0
 ]).
+
+%%
+%% Boot
+%%
+
+-rabbit_boot_step({rabbit_maintenance_mode_state,
+    [{description, "initializes maintenance mode state"},
+        {mfa,         {?MODULE, boot, []}},
+        {requires,    networking}]}).
+
+boot() ->
+    case rabbit_feature_flags:is_enabled(?FEATURE_FLAG, non_blocking) of
+        true ->
+            TableName = status_table_name(),
+            rabbit_log:info(
+                "Creating table ~s for feature flag `~s`",
+                [TableName, ?FEATURE_FLAG]),
+            try
+                _ = rabbit_table:create(
+                    TableName,
+                    status_table_definition())
+            catch throw:Reason  ->
+                rabbit_log:error(
+                    "Failed to create maintenance status table: ~p",
+                    [Reason])
+            end;
+        false ->
+            ok;
+        state_changing ->
+            %% feature flag migration will do the job for us
+            ok
+    end.
 
 %%
 %% API
@@ -80,11 +113,11 @@ do_drain() ->
     suspend_all_client_listeners(),
     rabbit_log:warning("Suspended all listeners and will no longer accept client connections"),
     {ok, NConnections} = close_all_client_connections(),
+    rabbit_log:warning("Closed ~b local client connections", [NConnections]),
     %% allow plugins to react e.g. by closing their protocol connections
     rabbit_event:notify(maintenance_connections_closed, #{
         reason => <<"node is being put into maintenance">>
     }),
-    rabbit_log:warning("Closed ~b local client connections", [NConnections]),
 
     TransferCandidates = primary_replica_transfer_candidate_nodes(),
     %% Note: only QQ leadership is transferred because it is a reasonably quick thing to do a lot of queues
@@ -270,15 +303,15 @@ transfer_leadership_of_classic_mirrored_queues(TransferCandidates) ->
                           [rabbit_misc:rs(Name), readable_candidate_list(ExistingReplicaNodes)]),
          case random_primary_replica_transfer_candidate_node(TransferCandidates, ExistingReplicaNodes) of
              {ok, Pick} ->
-                 rabbit_log:debug("Will transfer leadership of local ~s to node ~s",
+                 rabbit_log:debug("Will transfer leadership of local ~s. Planned target node: ~s",
                           [rabbit_misc:rs(Name), Pick]),
                  case rabbit_mirror_queue_misc:migrate_leadership_to_existing_replica(Q, Pick) of
-                     {migrated, _} ->
+                     {migrated, NewPrimary} ->
                          rabbit_log:debug("Successfully transferred leadership of queue ~s to node ~s",
-                                          [rabbit_misc:rs(Name), Pick]);
+                                          [rabbit_misc:rs(Name), NewPrimary]);
                      Other ->
-                         rabbit_log:warning("Could not transfer leadership of queue ~s to node ~s: ~p",
-                                            [rabbit_misc:rs(Name), Pick, Other])
+                         rabbit_log:warning("Could not transfer leadership of queue ~s: ~p",
+                                            [rabbit_misc:rs(Name), Other])
                  end;
              undefined ->
                  rabbit_log:warning("Could not transfer leadership of queue ~s: no suitable candidates?",

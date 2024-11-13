@@ -1,15 +1,11 @@
-load(
-    "@bazel-erlang//:bazel_erlang_lib.bzl",
-    "erlang_lib",
-    "test_erlang_lib",
-)
-load("@bazel-erlang//:xref.bzl", "xref")
-load("@bazel-erlang//:dialyze.bzl", "dialyze", "plt")
-load("@bazel-erlang//:ct_sharded.bzl", "ct_suite")
+load("@rules_erlang//:erlang_app.bzl", "erlang_app", "test_erlang_app")
+load("@rules_erlang//:xref.bzl", "xref")
+load("@rules_erlang//:dialyze.bzl", "DEFAULT_PLT_APPS", "dialyze", "plt")
+load("@rules_erlang//:ct_sharded.bzl", "ct_suite")
 
 NAME = "osiris"
 
-VERSION = "0.1.0"
+VERSION = "1.0.0"
 
 APP_ENV = """[
 	{data_dir, "/tmp/osiris"},
@@ -23,14 +19,14 @@ EXTRA_APPS = [
 ]
 
 DEPS = [
-    "@gen_batch_server//:bazel_erlang_lib",
+    "@gen_batch_server//:erlang_app",
 ]
 
 RUNTIME_DEPS = [
-    "@seshat//:bazel_erlang_lib",
+    "@seshat//:erlang_app",
 ]
 
-erlang_lib(
+erlang_app(
     app_env = APP_ENV,
     app_name = NAME,
     app_version = VERSION,
@@ -39,7 +35,7 @@ erlang_lib(
     deps = DEPS,
 )
 
-test_erlang_lib(
+test_erlang_app(
     app_env = APP_ENV,
     app_name = NAME,
     app_version = VERSION,
@@ -48,14 +44,25 @@ test_erlang_lib(
     deps = DEPS,
 )
 
-xref()
+xref(
+    size = "small",
+    tags = ["xref"],
+)
 
 plt(
     name = "base_plt",
+    apps = DEFAULT_PLT_APPS + EXTRA_APPS,
+    deps = DEPS + RUNTIME_DEPS,
 )
 
 dialyze(
+    size = "small",
+    dialyzer_opts = [
+        "-Werror_handling",
+        "-Wunmatched_returns",
+    ],
     plt = ":base_plt",
+    tags = ["dialyze"],
 )
 
 [ct_suite(

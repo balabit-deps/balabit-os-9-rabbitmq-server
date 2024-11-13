@@ -7,10 +7,6 @@
 
 -module(rabbit_trust_store).
 
-%% Transitional step until we can require Erlang/OTP 21 and
-%% use the now recommended try/catch syntax for obtaining the stack trace.
--compile(nowarn_deprecated_function).
-
 -behaviour(gen_server).
 
 -export([mode/0, refresh/0, list/0]). %% Console Interface.
@@ -42,7 +38,7 @@
     refresh_interval :: integer()
 }).
 -record(entry, {
-    name :: string(),
+    name :: string() | undefined,
     cert_id :: term(),
     provider :: module(),
     issuer_id :: tuple(),
@@ -128,16 +124,16 @@ is_whitelisted(#'OTPCertificate'{}=C) ->
 
 init([]) ->
     erlang:process_flag(trap_exit, true),
-    ets:new(table_name(), table_options()),
+    _ = ets:new(table_name(), table_options()),
     Config = application:get_all_env(rabbitmq_trust_store),
     ProvidersState = refresh_certs(Config, []),
     Interval = refresh_interval(Config),
-    if
-        Interval =:= 0 ->
-            ok;
-        Interval  >  0 ->
-            erlang:send_after(Interval, erlang:self(), refresh)
-    end,
+    _ = if
+            Interval =:= 0 ->
+                ok;
+            Interval  >  0 ->
+                erlang:send_after(Interval, erlang:self(), refresh)
+        end,
     State = #state{
         providers_state = ProvidersState,
         refresh_interval = Interval},
