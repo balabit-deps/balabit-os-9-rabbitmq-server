@@ -1,3 +1,12 @@
+rabbitmq-server (3.9.27-0ubuntu0.2) jammy-security; urgency=medium
+
+  * SECURITY UPDATE: XSS vulnerability
+    - debian/patches/CVE-2025-30219.patch: sanitize error message in
+      management ui.
+    - CVE-2025-30219
+
+ -- Fabian Toepfer <fabian.toepfer@canonical.com>  Thu, 27 Mar 2025 17:08:12 +0100
+
 rabbitmq-server (3.9.27-0ubuntu0.1) jammy; urgency=medium
 
   * New upstream version 3.9.27 (LP: #2060248):
