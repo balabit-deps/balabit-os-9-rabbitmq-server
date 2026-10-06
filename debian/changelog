@@ -1,3 +1,61 @@
+rabbitmq-server (3.9.27-0ubuntu0.6) jammy-security; urgency=medium
+
+  * SECURITY UPDATE: CORS misconfiguration
+    - debian/patches/CVE-2026-66070.patch: fix CORS wildcard origin
+      reflecting credentials in rabbit_mgmt_cors.erl
+    - CVE-2026-66070
+  * SECURITY UPDATE: Stored XSS
+    - debian/patches/CVE-2026-66077.patch: fix stored XSS via TLS
+      peer-certificate DN in management UI connection.ejs
+    - CVE-2026-66077
+  * SECURITY UPDATE: Pre-auth denial of service
+    - debian/patches/CVE-2026-66079.patch: fix pre-auth AMQP 1.0 array32
+      zero-width element DoS in amqp10_binary_parser.erl
+    - CVE-2026-66079
+  * SECURITY UPDATE: TLS authentication bypass
+    - debian/patches/CVE-2026-67231_1.patch: fix TLS client-auth bypass
+      in trust-store plugin using SHA-256 cert fingerprint
+    - CVE-2026-67231
+  * SECURITY UPDATE: Pre-auth denial of service
+    - debian/patches/CVE-2026-67232.patch: set Cowboy max_frame_size for
+      Web MQTT and Web STOMP to prevent zlib bomb DoS
+    - CVE-2026-67232
+  * SECURITY UPDATE: Unbounded memory allocation
+    - debian/patches/CVE-2026-67235.patch: validate content-header body size
+      against max_message_size in rabbit_command_assembler.erl
+    - CVE-2026-67235
+  * SECURITY UPDATE: Cleartext credential storage
+    - debian/patches/CVE-2026-67236.patch: remove insecure auth cookie
+      storing base64-encoded credentials without HttpOnly/Secure flags
+    - CVE-2026-67236
+  * SECURITY UPDATE: Denial of service
+    - debian/patches/CVE-2026-67238.patch: use binary_to_existing_atom
+      instead of binary_to_atom in pid_recomposition.erl to prevent
+      atom table exhaustion DoS
+    - CVE-2026-67238
+  * SECURITY UPDATE: Stored XSS
+    - debian/patches/CVE-2026-67239_1.patch: fix stored XSS via TLS
+      peer-certificate DN in stream management UI streamConnection.ejs
+    - debian/patches/CVE-2026-67239_2.patch: apply fmt_string to more
+      rendered values in streamConnection.ejs
+    - CVE-2026-67239
+  * SECURITY UPDATE: Authentication denial of service
+    - debian/patches/CVE-2026-67409.patch: validate HTTP response status
+      code when fetching JWKS keys to prevent auth DoS
+    - CVE-2026-67409
+
+ -- Leonidas Da Silva Barbosa <leo.barbosa@canonical.com>  Tue, 06 Oct 2026 13:54:09 -0300
+
+rabbitmq-server (3.9.27-0ubuntu0.5) jammy-security; urgency=medium
+
+  * SECURITY UPDATE: Allocation of resources without limits
+    - debian/patches/CVE-2026-59248.patch: add a hard limit for HPACK
+      integer decoding in bundled cowlib to prevent memory exhaustion
+      via crafted HPACK/QPACK prefixed-integer encoding.
+    - CVE-2026-59248
+
+ -- Leonidas Da Silva Barbosa <leo.barbosa@canonical.com>  Tue, 29 Sep 2026 07:43:51 -0300
+
 rabbitmq-server (3.9.27-0ubuntu0.2) jammy-security; urgency=medium
 
   * SECURITY UPDATE: XSS vulnerability

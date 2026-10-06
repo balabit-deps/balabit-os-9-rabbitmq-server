@@ -6,3 +6,15 @@ lets-use-python3-not-python-binary.patch
 max-ports-compat.patch
 0007-Correctly-decrease-global-counters-in-rabbit_channel.patch
 CVE-2025-30219.patch
+CVE-2026-59248.patch
+CVE-2026-66077.patch
+CVE-2026-66070.patch
+CVE-2026-67235.patch
+CVE-2026-67239_1.patch
+CVE-2026-67236.patch
+CVE-2026-67231_1.patch
+CVE-2026-67238.patch
+CVE-2026-67239_2.patch
+CVE-2026-67232.patch
+CVE-2026-66079.patch
+CVE-2026-67409.patch
